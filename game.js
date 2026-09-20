@@ -81,6 +81,16 @@ function handlePlayCard(playerId, playedCard) {
         if (gameState.calledCards.includes(cardStr)) {
             player.team = 'BIDDER_TEAM';
             gameState.calledCards = gameState.calledCards.filter(c => c !== cardStr);
+
+            // Once ALL called cards have appeared on the table,
+            // everyone remaining who isn't on the bidder team is officially exposed as a DEFENDER
+            if (gameState.calledCards.length === 0) {
+                gameState.players.forEach(p => {
+                    if (p.team === 'UNKNOWN') {
+                        p.team = 'DEFENDER_TEAM';
+                    }
+                });
+            }
         }
 
         if (gameState.board.length === gameState.players.length) {
@@ -236,11 +246,25 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
 
     gameState.trumpSuit = suit;
-    gameState.calledCards = calledCardsArray; 
+    gameState.calledCards = [...calledCardsArray]; 
     
     const bidderIndex = gameState.players.findIndex(p => p.id === playerId);
     gameState.players[bidderIndex].team = 'BIDDER_TEAM';
     gameState.turnIndex = bidderIndex;
     
     gameState.phase = 'PLAYING';
+}
+
+function getSanitizedStateForClient(clientId) {
+    // Create a deep copy of the state
+    let safeState = JSON.parse(JSON.stringify(gameState));
+    
+    safeState.players.forEach(p => {
+        if (p.id !== clientId) {
+            // Scrub other players' cards, only keep the length
+            const cardCount = p.hand.length;
+            p.hand = new Array(cardCount).fill(null);
+        }
+    });
+    return safeState;
 }

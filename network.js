@@ -8,7 +8,8 @@ let hostConnection = null;
 function broadcastState() {
     if (!isHost) return;
     Object.values(connections).forEach(conn => {
-        conn.send({ type: 'STATE_UPDATE', state: gameState });
+        const safeState = getSanitizedStateForClient(conn.peer);
+        conn.send({ type: 'STATE_UPDATE', state: safeState });
     });
     renderState(); 
 }
@@ -35,7 +36,22 @@ document.getElementById('hostBtn').addEventListener('click', () => {
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
                 { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' }
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { 
+                    urls: "turn:openrelay.metered.ca:80", 
+                    username: "openrelayproject", 
+                    credential: "openrelayproject" 
+                },
+                { 
+                    urls: "turn:openrelay.metered.ca:443", 
+                    username: "openrelayproject", 
+                    credential: "openrelayproject" 
+                },
+                {
+                    urls: "turn:openrelay.metered.ca:443?transport=tcp", 
+                    username: "openrelayproject", 
+                    credential: "openrelayproject" 
+                }
             ]
         }
     });
@@ -87,7 +103,22 @@ document.getElementById('joinBtn').addEventListener('click', () => {
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
                 { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' }
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { 
+                    urls: "turn:openrelay.metered.ca:80", 
+                    username: "openrelayproject", 
+                    credential: "openrelayproject" 
+                },
+                { 
+                    urls: "turn:openrelay.metered.ca:443", 
+                    username: "openrelayproject", 
+                    credential: "openrelayproject" 
+                },
+                { 
+                    urls: "turn:openrelay.metered.ca:443?transport=tcp", 
+                    username: "openrelayproject", 
+                    credential: "openrelayproject" 
+                }
             ]
         }
     });

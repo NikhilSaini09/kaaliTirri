@@ -52,18 +52,18 @@ function renderGameBoard() {
     const oppArea = document.getElementById('opponents-area');
     const gameInfo = document.getElementById('game-info');
     const hostControls = document.getElementById('host-controls-wrapper');
+    const scorecard = document.getElementById('scorecard-modal');
+    const modalBtn = document.getElementById('modalBackToLobbyBtn');
+    const actionOverlay = document.getElementById('action-overlay');
     const biddingPanel = document.getElementById('bidding-panel');
     const trumpPanel = document.getElementById('trump-panel');
     const teamCardsContainer = document.getElementById('team-cards-container');
-    const scorecard = document.getElementById('scorecard-modal');
-    const modalBtn = document.getElementById('modalBackToLobbyBtn');
     
     myArea.innerHTML = ''; boardArea.innerHTML = ''; oppArea.innerHTML = '';
     document.getElementById('phase-display').textContent = `Phase: ${gameState.phase}`;
     hostControls.style.display = isHost ? 'block' : 'none';
 
     // 1. Center Board (Played Cards)
-    // Add slight random rotation to played cards to look like a pile
     gameState.board.forEach((card, index) => {
         const cardEl = createCardElement(card, false);
         cardEl.classList.add('played-card');
@@ -74,16 +74,15 @@ function renderGameBoard() {
 
     // 2. Opponents (Radial Distribution)
     const opponents = gameState.players.filter(p => p.id !== myPeerId);
-    const angleStep = Math.PI / (opponents.length + 1); // Distribute over top semi-circle
+    const angleStep = Math.PI / (opponents.length + 1);
 
     opponents.forEach((player, index) => {
         const oppDiv = document.createElement('div');
         oppDiv.className = 'opponent-container';
         oppDiv.style.pointerEvents = 'auto';
         
-        // Concise Name Format: Name (Cards, Pts)
         let teamIcon = player.team === 'BIDDER_TEAM' ? '🔥' : (player.team === 'DEFENDER_TEAM' ? '🛡️' : '❓');
-        const cleanName = player.name.replace(" (Host)", "").replace(" (Spectator)", "");
+        const cleanName = player.name;
         
         let pileHtml = '';
         if (player.wonCards && player.wonCards.length > 0) {
@@ -111,9 +110,10 @@ function renderGameBoard() {
 
         // Calculate Position
         const angle = angleStep * (index + 1);
-        const radius = 40; // Percentage from center
-        oppDiv.style.left = `${50 - Math.cos(angle) * radius}%`;
-        oppDiv.style.top = `${40 - Math.sin(angle) * radius}%`;
+        const rx = 40;
+        const ry = 30;
+        oppDiv.style.left = `${50 - Math.cos(angle) * rx}%`;
+        oppDiv.style.top = `${45 - Math.sin(angle) * ry}%`;
         oppDiv.style.transform = "translate(-50%, -50%)";
 
         oppArea.appendChild(oppDiv);
@@ -166,37 +166,46 @@ function renderGameBoard() {
             }
         }
 
-        // 5. Bidding & Trump Panels
-        biddingPanel.style.display = (gameState.phase === 'BIDDING' && !me.hasFolded) ? 'flex' : 'none';
-        if (biddingPanel.style.display === 'flex') {
+        // 5. Action Overlay Routing
+        let showOverlay = false;
+        biddingPanel.style.display = 'none';
+        trumpPanel.style.display = 'none';
+
+        if (gameState.phase === 'BIDDING' && !me.hasFolded) {
+            showOverlay = true;
+            biddingPanel.style.display = 'flex';
+            
             const minBid = Math.max(80, gameState.highestBid.amount + 5);
             document.getElementById('bidAmount').min = minBid;
             document.getElementById('bidAmount').placeholder = `>= ${minBid}`;
-        }
-
-        if (gameState.phase === 'TRUMP_SELECTION' && gameState.highestBid.playerId === myPeerId) {
+        } 
+        else if (gameState.phase === 'TRUMP_SELECTION' && gameState.highestBid.playerId === myPeerId) {
+            showOverlay = true;
             trumpPanel.style.display = 'flex';
+            
             teamCardsContainer.innerHTML = ''; 
             let allowedCards = Math.floor((gameState.players.length - 2) / 2);
-            
             for (let i = 0; i < allowedCards; i++) {
                 const selectorDiv = document.createElement('div');
-                selectorDiv.style.display = 'flex'; selectorDiv.style.gap = '5px';
+                selectorDiv.style.display = 'flex'; selectorDiv.style.gap = '10px';
                 
                 const rankSelect = document.createElement('select');
                 rankSelect.className = 'team-rank-select';
+                rankSelect.style.flexGrow = '1';
                 values.forEach(v => rankSelect.appendChild(new Option(v, v)));
                 
                 const suitSelect = document.createElement('select');
                 suitSelect.className = 'team-suit-select';
+                suitSelect.style.flexGrow = '1';
                 suits.forEach(s => suitSelect.appendChild(new Option(s, s)));
                 
                 selectorDiv.appendChild(rankSelect); selectorDiv.appendChild(suitSelect);
                 teamCardsContainer.appendChild(selectorDiv);
             }
-        } else {
-            trumpPanel.style.display = 'none';
         }
+
+        // Display the dark fullscreen background only if a panel is active
+        actionOverlay.style.display = showOverlay ? 'flex' : 'none';
     }
 
     // 6. Game Over Modal

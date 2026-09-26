@@ -43,7 +43,6 @@
     <!-- VIEW 3: Active Game Board -->
     <div id="view-game" class="view-container" style="display: none; width: 100%; max-width: 1200px; height: 100vh; flex-direction: column;">
         
-        <!-- Added z-index: 100 and relative positioning so clicks register over the opponent layer -->
         <div id="game-header" style="position: relative; z-index: 100; display: flex; justify-content: space-between; align-items: flex-start; padding: 10px;">
             <div id="phase-display" style="background: rgba(0,0,0,0.6); color: white; padding: 8px 15px; border-radius: 20px; font-weight: bold;">Phase: LOBBY</div>
             
@@ -51,7 +50,6 @@
                 <span id="bid-info"></span> <span id="trump-info" style="margin-left: 10px; border-left: 1px solid gray; padding-left: 10px;"></span>
             </div>
 
-            <!-- Host Dropdown Menu -->
             <div id="host-controls-wrapper" style="position: relative; display: none;">
                 <button id="hostMenuToggle" style="background: rgba(255,255,255,0.2); color: white; border-radius: 50%; width: 40px; height: 40px; font-size: 20px; pointer-events: auto;">⚙️</button>
                 <div id="host-dropdown" style="display: none; position: absolute; right: 0; top: 45px; background: #333; border-radius: 8px; padding: 10px; flex-direction: column; gap: 5px; min-width: 150px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
@@ -61,58 +59,58 @@
             </div>
         </div>
 
+        <!-- NEW: Fullscreen Action Overlay -->
+        <div id="action-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); z-index: 2000; justify-content: center; align-items: center;">
+            
+            <!-- Robust Bidding Panel -->
+            <div id="bidding-panel" style="display: none; flex-direction: column; gap: 15px; background: #1b5e20; padding: 30px; border-radius: 12px; border: 2px solid #ffd700; width: 90%; max-width: 350px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                <h3 style="color: white; margin: 0; font-size: 24px;">Place Your Bid</h3>
+                <p style="color: #ddd; font-size: 14px; margin: 0;">Multiples of 5 only.</p>
+                <input type="number" id="bidAmount" min="80" step="5" style="font-size: 24px; text-align: center; padding: 10px; border-radius: 8px; width: 100%;">
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button id="submitBidBtn" style="background: #4CAF50; color: white; flex-grow: 1; padding: 12px; font-size: 18px;">Bid</button>
+                    <button id="foldBtn" style="background: #f44336; color: white; flex-grow: 1; padding: 12px; font-size: 18px;">Fold</button>
+                </div>
+            </div>
+
+            <!-- Robust Trump Panel -->
+            <div id="trump-panel" style="display: none; flex-direction: column; gap: 15px; background: #1b5e20; padding: 30px; border-radius: 12px; border: 2px solid #ffd700; width: 90%; max-width: 400px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                <h3 style="color: white; margin: 0; font-size: 24px;">Choose Cart & Team</h3>
+                <div style="color: white; font-weight: bold; text-align: left;">Cart (Trump Suit):</div>
+                <select id="trumpSuitSelect" style="padding: 10px; font-size: 18px; border-radius: 5px; width: 100%;">
+                    <option value="♠">♠ Spades</option><option value="♥">♥ Hearts</option><option value="♦">♦ Diamonds</option><option value="♣">♣ Clubs</option>
+                </select>
+                <div style="color: white; font-weight: bold; text-align: left; margin-top: 10px;">Team Cards:</div>
+                <div id="team-cards-container" style="display: flex; flex-direction: column; gap: 10px;"></div>
+                <button id="setTrumpBtn" style="background: #2196F3; color: white; padding: 12px; font-size: 18px; margin-top: 10px; width: 100%;">Start Game</button>
+            </div>
+        </div>
+
         <div style="flex-grow: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; position: relative;">
             
-            <!-- Opponents distributed around top and sides. Shifted top down to avoid header. -->
-            <div id="opponents-area" style="position: absolute; top: 50px; left: 0; right: 0; bottom: 150px; pointer-events: none;"></div>
+            <div id="opponents-area" style="position: absolute; top: 0; left: 0; right: 0; bottom: 150px; pointer-events: none;"></div>
             
-            <!-- NEW WRAPPER: Separates the board from the panels so innerHTML wipe doesn't delete them -->
             <div id="table-wrapper" style="position: relative; width: 250px; height: 250px; display: flex; justify-content: center; align-items: center;">
-                
-                <!-- Only played cards go in here now -->
                 <div id="center-board" style="width: 100%; height: 100%; background: rgba(46, 125, 50, 0.8); border: 8px solid #5d4037; border-radius: 50%; display: flex; justify-content: center; align-items: center; position: absolute; box-shadow: 0 10px 20px rgba(0,0,0,0.4); z-index: 10;"></div>
-                
-                <div id="bidding-panel" style="display: none; position: absolute; flex-direction: column; gap: 8px; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 12px; z-index: 20; pointer-events: auto;">
-                    <input type="number" id="bidAmount" placeholder="Bid" min="80" step="5" style="width: 100px; text-align: center;">
-                    <div style="display: flex; gap: 5px;">
-                        <button id="submitBidBtn" style="background: #4CAF50; color: white; flex-grow: 1; padding: 8px;">Bid</button>
-                        <button id="foldBtn" style="background: #f44336; color: white; flex-grow: 1; padding: 8px;">Fold</button>
-                    </div>
-                </div>
-
-                <div id="trump-panel" style="display: none; position: absolute; flex-direction: column; gap: 10px; background: rgba(0,0,0,0.9); padding: 15px; border-radius: 12px; z-index: 20; pointer-events: auto; text-align: center;">
-                    <div style="color: white; font-weight: bold;">Choose Cart</div>
-                    <select id="trumpSuitSelect" style="padding: 5px;">
-                        <option value="♠">♠</option><option value="♥">♥</option><option value="♦">♦</option><option value="♣">♣</option>
-                    </select>
-                    <div style="color: white; font-weight: bold; font-size: 12px;">Team Cards</div>
-                    <div id="team-cards-container" style="display: flex; flex-direction: column; gap: 5px;"></div>
-                    <button id="setTrumpBtn" style="background: #2196F3; color: white; padding: 8px;">Start</button>
-                </div>
             </div>
             
             <div id="my-area" style="position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: center;"></div>
         </div>
 
+        <!-- Modal Includes Remain Identical -->
         <div id="scorecard-modal" style="display: none; position: absolute; top: 10%; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 20px; border-radius: 10px; border: 2px solid #ffd700; z-index: 1000; width: 80%; max-width: 500px; text-align: center; box-shadow: 0 0 20px rgba(0,0,0,0.8);">
-            <!-- Keeps your existing scorecard markup intact -->
-            <h2 id="score-title">Round Over</h2>
-            <hr>
+            <h2 id="score-title">Round Over</h2><hr>
             <div style="display: flex; justify-content: space-between; margin: 10px 0;">
                 <div style="text-align: left; width: 45%;">
-                    <h3 style="color: #ff9800;">🔥 Bidder Team</h3>
-                    <div id="bidder-stats"></div><br>
-                    <strong>Total: <span id="bidder-total"></span></strong><br>
-                    <small>Target: <span id="bid-target"></span></small>
+                    <h3 style="color: #ff9800;">🔥 Bidder Team</h3><div id="bidder-stats"></div><br>
+                    <strong>Total: <span id="bidder-total"></span></strong><br><small>Target: <span id="bid-target"></span></small>
                 </div>
                 <div style="border-left: 1px solid gray;"></div>
                 <div style="text-align: left; width: 45%; padding-left: 10px;">
-                    <h3 style="color: #03a9f4;">🛡️ Defender Team</h3>
-                    <div id="defender-stats"></div><br>
+                    <h3 style="color: #03a9f4;">🛡️ Defender Team</h3><div id="defender-stats"></div><br>
                     <strong>Total: <span id="defender-total"></span></strong>
                 </div>
-            </div>
-            <hr>
+            </div><hr>
             <button id="modalBackToLobbyBtn" style="display: none; background: #f44336; color: white; width: 100%; margin-top: 10px;">Return to Lobby</button>
         </div>
         

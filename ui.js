@@ -340,18 +340,7 @@ document.getElementById('startGameBtn').addEventListener('click', () => {
 });
 
 document.getElementById('backToLobbyBtn').addEventListener('click', () => {
-    if (isHost) {
-        gameState.phase = 'LOBBY';
-        if (gameState.spectators) {
-            gameState.spectators.forEach(s => {
-                // Strip the "(Spectator)" tag
-                const cleanName = s.name.replace(" (Spectator)", "");
-                gameState.players.push({ id: s.id, name: cleanName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
-            });
-            gameState.spectators = [];
-        }
-        broadcastState();
-    }
+    if (isHost) { document.getElementById('modalBackToLobbyBtn').click(); }
 });
 
 document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
@@ -395,17 +384,23 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
 });
 
 document.getElementById('submitBidBtn').addEventListener('click', () => {
-    const bid = document.getElementById('bidAmount').value;
-    if (bid === "") return;
+    const bidInput = document.getElementById('bidAmount');
+    const bid = bidInput.value;
+    
+    if (!bid || bid === "") return;
+    
     if (isHost) { 
         const res = handlePlaceBid(myPeerId, bid); 
-        if (res && res.error) alert(res.error);
-        else broadcastState(); 
+        if (res && res.error) {
+            alert(res.error);
+        } else {
+            broadcastState(); 
+        }
     }
     else if (hostConnection) {
         hostConnection.send({ type: 'ACTION_PLACE_BID', amount: bid });
     }
-    document.getElementById('bidAmount').value = ''; 
+    bidInput.value = ''; 
 });
 
 document.getElementById('foldBtn').addEventListener('click', () => {

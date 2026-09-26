@@ -25,15 +25,18 @@
     </div>
 
     <!-- VIEW 2: Waiting Room -->
-    <div id="view-lobby" class="view-container" style="display: none; flex-direction: column; align-items: center; width: 100%; max-width: 800px; margin-top: 5vh; background: rgba(0,0,0,0.6); padding: 30px; border-radius: 12px;">
+    <!-- FIX: Changed from flex-column stretch to block with margin: 5vh auto -->
+    <div id="view-lobby" class="view-container" style="display: none; width: 100%; max-width: 600px; margin: 5vh auto; background: rgba(0,0,0,0.6); padding: 30px; border-radius: 12px; text-align: center; box-shadow: 0 8px 16px rgba(0,0,0,0.3);">
         <h2 style="color: white; margin-top: 0;">Waiting Room</h2>
         <div id="roomIdDisplay" style="margin-bottom: 20px; color: #ffd700; font-size: 20px; font-weight: bold; padding: 10px; background: rgba(0,0,0,0.4); border-radius: 8px;"></div>
-        <div id="lobby-players" style="width: 100%; color: white; display: flex; flex-direction: column; gap: 10px;"></div> 
+        
+        <div id="lobby-players" style="width: 100%; color: white; display: flex; flex-direction: column; gap: 10px; text-align: left;"></div> 
+        
         <button id="startGameBtn" style="display: none; background: #4CAF50; color: white; margin-top: 25px; width: 100%; font-size: 18px; padding: 12px;">Start Game</button>
 
         <div style="margin-top: 15px; display: flex; gap: 10px; justify-content: center;">
             <button id="saveBtn" style="background: #607d8b; color: white;">Download Save</button>
-            <label for="loadInput" style="background: #795548; color: white; padding: 10px 15px; border-radius: 5px; cursor: pointer;">
+            <label for="loadInput" style="background: #795548; color: white; padding: 10px 15px; border-radius: 5px; cursor: pointer; margin: 0;">
                 Load Save
             </label>
             <input type="file" id="loadInput" accept=".json" style="display: none;">
@@ -41,8 +44,9 @@
     </div>
 
     <!-- VIEW 3: Active Game Board -->
-    <div id="view-game" class="view-container" style="display: none; width: 100%; max-width: 1200px; height: 100vh; flex-direction: column;">
+    <div id="view-game" class="view-container" style="display: none; width: 100%; max-width: 1200px; height: 100vh; flex-direction: column; margin: 0 auto;">
         
+        <!-- Top Header Controls -->
         <div id="game-header" style="position: relative; z-index: 100; display: flex; justify-content: space-between; align-items: flex-start; padding: 10px;">
             <div id="phase-display" style="background: rgba(0,0,0,0.6); color: white; padding: 8px 15px; border-radius: 20px; font-weight: bold;">Phase: LOBBY</div>
             
@@ -59,33 +63,34 @@
             </div>
         </div>
 
-        <!-- NEW: Fullscreen Action Overlay -->
-        <div id="action-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); z-index: 2000; justify-content: center; align-items: center;">
+        <!-- ACTION OVERLAY: Fixed invisible wrapper to center panels without blocking clicks -->
+        <div id="action-overlay" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2000; justify-content: center; align-items: center;">
             
-            <!-- Robust Bidding Panel -->
-            <div id="bidding-panel" style="display: none; flex-direction: column; gap: 15px; background: #1b5e20; padding: 30px; border-radius: 12px; border: 2px solid #ffd700; width: 90%; max-width: 350px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+            <!-- Bidding Panel -->
+            <div id="bidding-panel" style="display: none; pointer-events: auto; flex-direction: column; gap: 15px; background: #1b5e20; padding: 30px; border-radius: 12px; border: 2px solid #ffd700; width: 90%; max-width: 350px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.9);">
                 <h3 style="color: white; margin: 0; font-size: 24px;">Place Your Bid</h3>
                 <p style="color: #ddd; font-size: 14px; margin: 0;">Multiples of 5 only.</p>
-                <input type="number" id="bidAmount" min="80" step="5" style="font-size: 24px; text-align: center; padding: 10px; border-radius: 8px; width: 100%;">
+                <input type="number" id="bidAmount" min="80" step="5" style="font-size: 24px; text-align: center; padding: 10px; border-radius: 8px; width: 100%; border: none;">
                 <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <button id="submitBidBtn" style="background: #4CAF50; color: white; flex-grow: 1; padding: 12px; font-size: 18px;">Bid</button>
-                    <button id="foldBtn" style="background: #f44336; color: white; flex-grow: 1; padding: 12px; font-size: 18px;">Fold</button>
+                    <button id="submitBidBtn" style="background: #4CAF50; color: white; flex-grow: 1; padding: 12px; font-size: 18px; border: none; border-radius: 5px;">Bid</button>
+                    <button id="foldBtn" style="background: #f44336; color: white; flex-grow: 1; padding: 12px; font-size: 18px; border: none; border-radius: 5px;">Fold</button>
                 </div>
             </div>
 
-            <!-- Robust Trump Panel -->
-            <div id="trump-panel" style="display: none; flex-direction: column; gap: 15px; background: #1b5e20; padding: 30px; border-radius: 12px; border: 2px solid #ffd700; width: 90%; max-width: 400px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+            <!-- Trump Panel -->
+            <div id="trump-panel" style="display: none; pointer-events: auto; flex-direction: column; gap: 15px; background: #1b5e20; padding: 30px; border-radius: 12px; border: 2px solid #ffd700; width: 90%; max-width: 400px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.9);">
                 <h3 style="color: white; margin: 0; font-size: 24px;">Choose Cart & Team</h3>
                 <div style="color: white; font-weight: bold; text-align: left;">Cart (Trump Suit):</div>
-                <select id="trumpSuitSelect" style="padding: 10px; font-size: 18px; border-radius: 5px; width: 100%;">
+                <select id="trumpSuitSelect" style="padding: 10px; font-size: 18px; border-radius: 5px; width: 100%; border: none;">
                     <option value="♠">♠ Spades</option><option value="♥">♥ Hearts</option><option value="♦">♦ Diamonds</option><option value="♣">♣ Clubs</option>
                 </select>
                 <div style="color: white; font-weight: bold; text-align: left; margin-top: 10px;">Team Cards:</div>
                 <div id="team-cards-container" style="display: flex; flex-direction: column; gap: 10px;"></div>
-                <button id="setTrumpBtn" style="background: #2196F3; color: white; padding: 12px; font-size: 18px; margin-top: 10px; width: 100%;">Start Game</button>
+                <button id="setTrumpBtn" style="background: #2196F3; color: white; padding: 12px; font-size: 18px; margin-top: 10px; width: 100%; border: none; border-radius: 5px;">Start Game</button>
             </div>
         </div>
 
+        <!-- The Playing Area -->
         <div style="flex-grow: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; position: relative;">
             
             <div id="opponents-area" style="position: absolute; top: 0; left: 0; right: 0; bottom: 150px; pointer-events: none;"></div>
@@ -94,10 +99,10 @@
                 <div id="center-board" style="width: 100%; height: 100%; background: rgba(46, 125, 50, 0.8); border: 8px solid #5d4037; border-radius: 50%; display: flex; justify-content: center; align-items: center; position: absolute; box-shadow: 0 10px 20px rgba(0,0,0,0.4); z-index: 10;"></div>
             </div>
             
-            <div id="my-area" style="position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: center;"></div>
+            <div id="my-area" style="position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: center; z-index: 50;"></div>
         </div>
 
-        <!-- Modal Includes Remain Identical -->
+        <!-- Modals -->
         <div id="scorecard-modal" style="display: none; position: absolute; top: 10%; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 20px; border-radius: 10px; border: 2px solid #ffd700; z-index: 1000; width: 80%; max-width: 500px; text-align: center; box-shadow: 0 0 20px rgba(0,0,0,0.8);">
             <h2 id="score-title">Round Over</h2><hr>
             <div style="display: flex; justify-content: space-between; margin: 10px 0;">

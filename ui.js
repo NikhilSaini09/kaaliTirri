@@ -425,7 +425,8 @@ document.getElementById('closeWonCardsBtn')?.addEventListener('click', () => {
 
 document.getElementById('hostMenuToggle')?.addEventListener('click', () => {
     const menu = document.getElementById('host-dropdown');
-    menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
+    const currentDisplay = window.getComputedStyle(menu).display;
+    menu.style.display = (currentDisplay === 'none') ? 'flex' : 'none';
 });
 
 document.getElementById('hostReshuffleBtn')?.addEventListener('click', () => {

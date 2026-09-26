@@ -176,8 +176,34 @@ function evaluateRoundEnd() {
 }
 
 function startDeal() {
-    gameState.deck = generateDeck();
+    let fullDeck = generateDeck();
     shuffle(gameState.deck);
+
+    const numPlayers = gameState.players.length;
+    if(numPlayers === 0) return;
+
+    const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));
+    const totalCardsToDeal = cardsPerPlayer * numPlayers;
+    const cardsToRemoveCount = 52 - totalCardsToDeal;
+
+    const evictionValues = ['2', '3', '4', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+    const evictionSuits = ['♦', '♣', '♥', '♠'];
+    let evictionList = [];
+    
+    for (let v of evictionValues) {
+        for (let s of evictionSuits) {
+            if (!(v === '3' && s === '♠')) { 
+                evictionList.push(`${v}${s}`);
+            }
+        }
+    }
+
+    const cardsToEvict = evictionList.slice(0, cardsToRemoveCount);
+
+    gameState.deck = fullDeck.filter(card => !cardsToEvict.includes(`${card.value}${card.suit}`));
+    shuffle(gameState.deck);
+    shuffle(gameState.deck);
+    
     gameState.board = [];
     gameState.highestBid = { playerId: null, amount: 0, playerName: "" };
     gameState.trumpSuit = null;
@@ -188,13 +214,12 @@ function startDeal() {
         p.wonCards = [];
         p.hasFolded = false;
         p.points = 0;
-        p.team = p.id === myPeerId ? 'UNKNOWN' : 'UNKNOWN'; // Reset teams
+        p.team = 'UNKNOWN'; // Reset teams
     });
 
-    const numPlayers = gameState.players.length;
-    let cardsToShuffle = Math.min(13, Math.trunc(52 / numPlayers)) * numPlayers;
+    // 6. Deal the playable deck evenly
     let currentPlayer = 0;
-    while (cardsToShuffle-- > 0) {
+    while (gameState.deck.length > 0) {
         gameState.players[currentPlayer].hand.push(gameState.deck.pop());
         currentPlayer = (currentPlayer + 1) % numPlayers;
     }

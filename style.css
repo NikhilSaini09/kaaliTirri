@@ -38,7 +38,6 @@ button:hover { opacity: 0.9; }
     flex-wrap: wrap;
     justify-content: center;
     align-items: flex-end;
-    gap: -40px; /* Force extreme overlap horizontally */
     padding: 0 20px;
     margin-bottom: 10px;
 }
@@ -70,6 +69,7 @@ button:hover { opacity: 0.9; }
     border: 1px solid #ccc;
     user-select: none;
     cursor: pointer;
+    flex-shrink: 0;
 }
 
 .red { color: #d32f2f; }

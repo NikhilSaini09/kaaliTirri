@@ -254,6 +254,10 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     margin: 0;
     flex: 1;
     font-size: 14px;
+    background: linear-gradient(180deg, var(--brass-300), var(--brass-500));
+    color: var(--ink);
+    border: 1px solid var(--brass-700);
+    box-shadow: var(--shadow-soft);
 }
 
 #view-game {
@@ -514,6 +518,15 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 .opponent-container .opp-name { display: flex; align-items: center; gap: 6px; }
 .opponent-container .opp-meta { font-size: 12px; font-weight: 500; opacity: 0.85; }
 
+.opponent-container.compact {
+    padding: 5px 10px;
+    font-size: 12px;
+    gap: 2px;
+}
+.opponent-container.compact .opp-meta { font-size: 10px; }
+.opponent-container.compact .hand-fan { height: 30px; }
+.opponent-container.compact .hand-fan-card { margin-left: -13px; }
+
 .hand-fan {
     display: flex;
     height: 38px;
@@ -587,9 +600,10 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 .my-card-wrapper {
     position: relative;
-    transition: transform 0.15s ease, margin-left 0.15s ease;
+    margin: 0 3px 6px;
+    transition: transform 0.15s ease;
 }
-.my-card-wrapper:hover { transform: translateY(-16px); z-index: 100 !important; }
+.my-card-wrapper:hover { transform: translateY(-10px); z-index: 100 !important; }
 
 .card {
     width: 65px;
@@ -597,16 +611,27 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     background: var(--ivory);
     border-radius: 8px;
     display: flex;
+    flex-direction: column;
     justify-content: center;
     align-items: center;
+    gap: 2px;
     font-family: var(--font-display);
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 700;
     box-shadow: -2px 2px 8px rgba(0,0,0,0.4);
     border: 1.5px solid rgba(0,0,0,0.35);
     user-select: none;
     cursor: pointer;
     flex-shrink: 0;
+}
+.card-rank { line-height: 1; }
+.card-suit {
+    /* Display/serif faces frequently lack suit glyphs and silently fall back to an
+       empty/invisible glyph - force a font stack that reliably draws them, especially
+       the solid black spade/club symbols. */
+    font-family: 'Segoe UI Symbol', 'Noto Sans Symbols2', 'DejaVu Sans', Arial, sans-serif;
+    font-size: 22px;
+    line-height: 1;
 }
 
 .red { color: var(--red-suit); }
@@ -649,9 +674,9 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 }
 
 .my-won-pile {
-    position: absolute;
-    right: 20px;
-    bottom: 25px;
+    position: fixed;
+    top: 64px;
+    right: 14px;
     z-index: 120;
     font-size: 13px;
     padding: 8px 14px;
@@ -727,7 +752,8 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 }
 
 @media (max-width: 640px) {
-    .card { width: 48px; height: 70px; font-size: 15px; border-radius: 6px; }
+    .card { width: 46px; height: 66px; font-size: 13px; border-radius: 6px; gap: 1px; }
+    .card-suit { font-size: 15px; }
     .mini-card { width: 18px !important; height: 27px !important; }
     .hand-fan { height: 27px; }
     .hand-fan-card { margin-left: -12px; }
@@ -757,7 +783,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     .action-panel h3 { font-size: 19px; }
     #bidAmount { font-size: 22px; }
 
-    .my-won-pile { right: 10px; bottom: 14px; font-size: 11px; padding: 6px 10px; }
+    .my-won-pile { top: 58px; right: 8px; font-size: 11px; padding: 6px 10px; }
     .your-turn-badge { font-size: 11px; padding: 5px 11px; }
 
     .modal-card { padding: 18px; width: 92%; }

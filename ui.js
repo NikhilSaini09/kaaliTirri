@@ -167,7 +167,8 @@ function renderGameBoard() {
         oppDiv.style.pointerEvents = 'auto';
 
         const isActiveTurn = activeTurnPlayer && activeTurnPlayer.id === player.id;
-        const isFolded = !!player.hasFolded;
+        const showFoldState = (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
+        const isFolded = showFoldState && !!player.hasFolded;
         if (isActiveTurn) oppDiv.classList.add('is-active-turn');
         if (isFolded) oppDiv.classList.add('is-folded');
 
@@ -201,16 +202,42 @@ function renderGameBoard() {
             });
         }
 
-        // Calculate Position
+        // Calculate Position - scale the radius out and stagger alternating seats when the
+        // table has enough players that a single tight arc would make containers collide.
         const angle = seatAngles[player.id];
-        const rx = 40;
-        const ry = 30;
+        const crowded = opponents.length > 3;
+        if (crowded) oppDiv.classList.add('compact');
+        const rx = Math.min(46, 38 + opponents.length * 1.2);
+        const baseRy = Math.min(34, 24 + opponents.length * 1.5);
+        const stagger = crowded && (index % 2 === 1) ? 8 : 0;
+        const ry = Math.min(42, baseRy + stagger);
         oppDiv.style.left = `${50 - Math.cos(angle) * rx}%`;
         oppDiv.style.top = `${45 - Math.sin(angle) * ry}%`;
         oppDiv.style.transform = "translate(-50%, -50%)";
 
         oppArea.appendChild(oppDiv);
     });
+
+    // Panels - visible to players and spectators alike, so this runs regardless of "me"
+    if (gameState.phase !== 'LOBBY') {
+        gameInfo.style.display = 'block';
+        if (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION') {
+            document.getElementById('bid-info').innerHTML = `High Bid: <b>${gameState.highestBid.amount || '—'}</b> (${gameState.highestBid.playerName ? cleanPlayerName(gameState.highestBid.playerName) : 'None yet'})`;
+            document.getElementById('trump-info').innerHTML = '';
+        } else {
+            document.getElementById('bid-info').innerHTML = `Target: <b>${gameState.highestBid.amount}</b> (${cleanPlayerName(gameState.highestBid.playerName)})`;
+            let trumpHtml = `Trump: <b class="${gameState.trumpSuit === '♥' || gameState.trumpSuit === '♦' ? 'red' : 'black'}">${gameState.trumpSuit}</b>`;
+            if (gameState.originalCalledCards && gameState.originalCalledCards.length > 0) {
+                const partnerHtml = gameState.originalCalledCards.map(c => {
+                    const suit = c.slice(-1);
+                    const cls = (suit === '♥' || suit === '♦') ? 'red' : 'black';
+                    return `<b class="${cls}">${c}</b>`;
+                }).join(', ');
+                trumpHtml += ` &middot; Partner: ${partnerHtml}`;
+            }
+            document.getElementById('trump-info').innerHTML = trumpHtml;
+        }
+    }
 
     // 3. Local Player
     const me = gameState.players.find(p => p.id === myPeerId);
@@ -226,8 +253,6 @@ function renderGameBoard() {
         me.hand.forEach((card, index) => {
             const wrapper = document.createElement('div');
             wrapper.className = 'my-card-wrapper';
-
-            // z-index ensures cards on the right overlay cards on the left
             wrapper.style.zIndex = index;
 
             const playable = isCardPlayable(myPeerId, card);
@@ -237,21 +262,6 @@ function renderGameBoard() {
             wrapper.appendChild(cardEl);
             myArea.appendChild(wrapper);
         });
-
-        // Only overlap the cards as much as is actually needed to fit them - keeps a small hand
-        // spaced out and readable, and a full hand just barely overlapping instead of piled up.
-        const cardWrappers = myArea.querySelectorAll('.my-card-wrapper');
-        if (cardWrappers.length > 0) {
-            const firstCardEl = cardWrappers[0].querySelector('.card');
-            const cardWidth = firstCardEl ? firstCardEl.getBoundingClientRect().width : 65;
-            const availWidth = myArea.clientWidth - 24;
-            const n = cardWrappers.length;
-            let gap = n > 1 ? (availWidth - n * cardWidth) / (n - 1) : 0;
-            gap = Math.max(-cardWidth * 0.68, Math.min(14, gap));
-            cardWrappers.forEach((wrapper, i) => {
-                wrapper.style.marginLeft = i === 0 ? '0px' : `${gap}px`;
-            });
-        }
 
         // Add clickable won pile for the local player if they have won cards
         if (me.wonCards && me.wonCards.length > 0) {
@@ -274,19 +284,7 @@ function renderGameBoard() {
             foldBanner.style.display = 'none';
         }
 
-        // Panels
-        if (gameState.phase !== 'LOBBY') {
-            gameInfo.style.display = 'block';
-            if (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION') {
-                document.getElementById('bid-info').innerHTML = `High Bid: <b>${gameState.highestBid.amount || '—'}</b> (${gameState.highestBid.playerName ? cleanPlayerName(gameState.highestBid.playerName) : 'None yet'})`;
-                document.getElementById('trump-info').innerHTML = '';
-            } else {
-                document.getElementById('bid-info').innerHTML = `Target: <b>${gameState.highestBid.amount}</b> (${cleanPlayerName(gameState.highestBid.playerName)})`;
-                document.getElementById('trump-info').innerHTML = `Cart: <b class="${gameState.trumpSuit === '♥' || gameState.trumpSuit === '♦' ? 'red' : 'black'}">${gameState.trumpSuit}</b>`;
-            }
-        }
-
-        // 5. Action Overlay Routing
+        // Action Overlay Routing
         let showOverlay = false;
         biddingPanel.style.display = 'none';
         trumpPanel.style.display = 'none';
@@ -327,7 +325,7 @@ function renderGameBoard() {
         }
 
         actionOverlay.style.display = showOverlay ? 'flex' : 'none';
-        actionOverlay.classList.toggle('no-dim', gameState.phase === 'BIDDING');
+        actionOverlay.classList.toggle('no-dim', gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
     }
 
     // 6. Game Over Modal
@@ -365,7 +363,7 @@ function renderGameBoard() {
 function createCardElement(card, isClickable, isPlayable = true) {
     const cardEl = document.createElement('div');
     cardEl.className = `card ${card.suit === '♥' || card.suit === '♦' ? 'red' : 'black'}`;
-    cardEl.textContent = `${card.value}${card.suit}`;
+    cardEl.innerHTML = `<span class="card-rank">${card.value}</span><span class="card-suit">${card.suit}</span>`;
 
     if (isClickable && !isPlayable) {
         cardEl.style.opacity = '0.5';
@@ -497,6 +495,7 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
         gameState.highestBid = { playerId: null, amount: 0, playerName: "" };
         gameState.trumpSuit = null;
         gameState.calledCards = [];
+        gameState.originalCalledCards = [];
         gameState.biddingDeadline = null;
         gameState.turnDeadline = null;
 
@@ -550,20 +549,34 @@ function closeWonCardsModal() {
 document.getElementById('closeWonCardsBtn')?.addEventListener('click', closeWonCardsModal);
 document.getElementById('won-cards-modal-backdrop')?.addEventListener('click', closeWonCardsModal);
 
-document.getElementById('hostMenuToggle')?.addEventListener('click', () => {
+function closeHostMenu() {
+    const menu = document.getElementById('host-dropdown');
+    if (menu) menu.style.display = 'none';
+}
+
+document.getElementById('hostMenuToggle')?.addEventListener('click', (e) => {
+    e.stopPropagation();
     const menu = document.getElementById('host-dropdown');
     const currentDisplay = window.getComputedStyle(menu).display;
     menu.style.display = (currentDisplay === 'none') ? 'flex' : 'none';
 });
 
+// Close the settings menu when clicking anywhere outside it
+document.addEventListener('click', (e) => {
+    const wrapper = document.getElementById('host-controls-wrapper');
+    if (wrapper && !wrapper.contains(e.target)) closeHostMenu();
+});
+
 document.getElementById('hostReshuffleBtn')?.addEventListener('click', () => {
     if(isHost) { startDeal(); broadcastState(); }
+    closeHostMenu();
 });
 document.getElementById('hostBackToLobbyBtn')?.addEventListener('click', () => {
     if(isHost) { document.getElementById('modalBackToLobbyBtn').click(); }
+    closeHostMenu();
 });
 
 document.getElementById('saveBtn')?.addEventListener('click', saveGame);
 document.getElementById('loadInput')?.addEventListener('change', loadGame);
-document.getElementById('hostSaveBtn')?.addEventListener('click', saveGame);
-document.getElementById('hostLoadInput')?.addEventListener('change', loadGame);
+document.getElementById('hostSaveBtn')?.addEventListener('click', () => { saveGame(); closeHostMenu(); });
+document.getElementById('hostLoadInput')?.addEventListener('change', (e) => { loadGame(e); closeHostMenu(); });

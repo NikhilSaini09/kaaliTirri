@@ -29,6 +29,7 @@ let gameState = {
     highestBid: { playerId: null, amount: 0, playerName: "" },
     trumpSuit: null,      
     calledCards: [],
+    originalCalledCards: [], // the partner card(s) as chosen - kept even after they're revealed/removed from calledCards
     spectators: [],
     biddingDeadline: null, // epoch ms; host auto-resolves bidding once this passes
     turnDeadline: null     // epoch ms; host auto-plays a card once this passes during PLAYING
@@ -220,6 +221,7 @@ function startDeal() {
     gameState.highestBid = { playerId: null, amount: 0, playerName: "" };
     gameState.trumpSuit = null;
     gameState.calledCards = [];
+    gameState.originalCalledCards = [];
 
     gameState.players.forEach(p => {
         p.hand = [];
@@ -354,6 +356,7 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
 
     gameState.trumpSuit = suit;
     gameState.calledCards = [...calledCardsArray]; 
+    gameState.originalCalledCards = [...calledCardsArray];
     
     const bidderIndex = gameState.players.findIndex(p => p.id === playerId);
     gameState.players[bidderIndex].team = 'BIDDER_TEAM';

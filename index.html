@@ -63,14 +63,15 @@
             </div>
         </div>
 
-        <!-- Bidding countdown -->
-        <div id="timer-bar-wrap">
-            <span id="timer-bar-label"></span>
-            <div id="timer-bar-track"><div id="timer-bar-fill"></div></div>
-            <span id="timer-bar-text">30s</span>
+        <!-- Countdown / status messages - stacked so they never collide with each other -->
+        <div id="status-stack">
+            <div id="timer-bar-wrap">
+                <span id="timer-bar-label"></span>
+                <div id="timer-bar-track"><div id="timer-bar-fill"></div></div>
+                <span id="timer-bar-text">30s</span>
+            </div>
+            <div id="fold-banner" class="chip" style="display: none;"></div>
         </div>
-
-        <div id="fold-banner" class="chip" style="display: none; position: absolute; top: 62px; left: 50%; transform: translateX(-50%); z-index: 90;"></div>
 
         <!-- ACTION OVERLAY -->
         <div id="action-overlay">

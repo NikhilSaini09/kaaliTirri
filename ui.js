@@ -132,8 +132,22 @@ function renderGameBoard() {
         stopTimerBarLoop();
     }
 
-    // Work out each opponent's seat angle up front so played cards can land on their side of the table.
-    const opponents = gameState.players.filter(p => p.id !== myPeerId);
+    // Order opponents by turn sequence (starting with whoever plays right after me) so the
+    // row reads left-to-right in the order they'll actually play - not an arbitrary seat order.
+    const myIndex = gameState.players.findIndex(p => p.id === myPeerId);
+    const n = gameState.players.length;
+    let opponents;
+    if (myIndex !== -1) {
+        opponents = [];
+        for (let i = 1; i < n; i++) opponents.push(gameState.players[(myIndex + i) % n]);
+    } else {
+        // Spectator: no personal seat to order from, just show the table's fixed seating order.
+        opponents = gameState.players.slice();
+    }
+
+    // Seat angles are only used to land each played card on the side of the table its
+    // player occupies - the chips themselves are laid out with plain flex-wrap below so
+    // they can never overlap, whatever the table size.
     const angleStep = Math.PI / (opponents.length + 1);
     const seatAngles = {};
     opponents.forEach((player, index) => {
@@ -160,11 +174,11 @@ function renderGameBoard() {
         boardArea.appendChild(cardEl);
     });
 
-    // 2. Opponents (Radial Distribution)
+    // 2. Opponents - plain flex row/wrap in turn order, so seats never collide regardless of count
+    const crowded = opponents.length > 3;
     opponents.forEach((player, index) => {
         const oppDiv = document.createElement('div');
-        oppDiv.className = 'opponent-container';
-        oppDiv.style.pointerEvents = 'auto';
+        oppDiv.className = 'opponent-container' + (crowded ? ' compact' : '');
 
         const isActiveTurn = activeTurnPlayer && activeTurnPlayer.id === player.id;
         const showFoldState = (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
@@ -201,19 +215,6 @@ function renderGameBoard() {
                 openWonCardsModal(player);
             });
         }
-
-        // Calculate Position - scale the radius out and stagger alternating seats when the
-        // table has enough players that a single tight arc would make containers collide.
-        const angle = seatAngles[player.id];
-        const crowded = opponents.length > 3;
-        if (crowded) oppDiv.classList.add('compact');
-        const rx = Math.min(46, 38 + opponents.length * 1.2);
-        const baseRy = Math.min(34, 24 + opponents.length * 1.5);
-        const stagger = crowded && (index % 2 === 1) ? 8 : 0;
-        const ry = Math.min(42, baseRy + stagger);
-        oppDiv.style.left = `${50 - Math.cos(angle) * rx}%`;
-        oppDiv.style.top = `${45 - Math.sin(angle) * ry}%`;
-        oppDiv.style.transform = "translate(-50%, -50%)";
 
         oppArea.appendChild(oppDiv);
     });
@@ -262,6 +263,34 @@ function renderGameBoard() {
             wrapper.appendChild(cardEl);
             myArea.appendChild(wrapper);
         });
+
+        // Size (never overlap) the hand to fit the available width. Cards shrink down to a
+        // legible minimum before anything wraps to a second row - and on a wide screen they
+        // can grow back up to their natural size instead of staying artificially small.
+        const cardWrappers = myArea.querySelectorAll('.my-card-wrapper');
+        if (cardWrappers.length > 0) {
+            const cardCount = cardWrappers.length;
+            const gap = 8;
+            const naturalWidth = window.innerWidth <= 640 ? 46 : 65;
+            const minWidth = window.innerWidth <= 640 ? 30 : 40;
+            const availWidth = myArea.clientWidth - 44; // #my-area has 20px padding each side
+            let cardW = Math.floor((availWidth - (cardCount - 1) * gap) / cardCount);
+            cardW = Math.max(minWidth, Math.min(naturalWidth, cardW));
+            const cardH = Math.round(cardW * 1.42);
+            const rankSize = Math.max(11, Math.round(cardW * 0.30));
+            const suitSize = Math.max(12, Math.round(cardW * 0.34));
+
+            cardWrappers.forEach(wrapper => {
+                wrapper.style.margin = `0 ${gap / 2}px 6px`;
+                const cardEl = wrapper.querySelector('.card');
+                if (!cardEl) return;
+                cardEl.style.width = `${cardW}px`;
+                cardEl.style.height = `${cardH}px`;
+                cardEl.style.fontSize = `${rankSize}px`;
+                const suitEl = cardEl.querySelector('.card-suit');
+                if (suitEl) suitEl.style.fontSize = `${suitSize}px`;
+            });
+        }
 
         // Add clickable won pile for the local player if they have won cards
         if (me.wonCards && me.wonCards.length > 0) {

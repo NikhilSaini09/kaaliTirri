@@ -262,11 +262,12 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 #view-game {
     width: 100%;
-    max-width: 1200px;
+    max-width: 1800px;
     height: 100vh;
     flex-direction: column;
     margin: 0 auto;
     position: relative;
+    overflow-y: auto;
 }
 
 #game-header {
@@ -296,6 +297,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     display: none;
     font-size: 14px;
     font-weight: 500;
+    background: rgba(0,0,0,0.45);
 }
 #game-info span#trump-info {
     margin-left: 10px;
@@ -303,14 +305,19 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     padding-left: 10px;
 }
 
+#status-stack {
+    position: relative;
+    z-index: 90;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px;
+}
+
 #timer-bar-wrap {
     display: none;
-    position: absolute;
-    top: 62px;
-    left: 50%;
-    transform: translateX(-50%);
     width: min(400px, 86%);
-    z-index: 90;
     background: rgba(0,0,0,0.4);
     border: 1px solid rgba(255,255,255,0.12);
     border-radius: 999px;
@@ -447,17 +454,26 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 .table-zone {
     flex-grow: 1;
+    width: 100%;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
+    gap: 16px;
     position: relative;
+    overflow: visible;
+    padding-top: 6px;
 }
 
 #opponents-area {
-    position: absolute;
-    inset: 0 0 150px 0;
-    pointer-events: none;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 10px;
+    width: 100%;
+    max-width: 1100px;
+    padding: 0 76px;
 }
 
 #table-wrapper {
@@ -486,8 +502,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 }
 
 #my-area {
-    position: absolute;
-    bottom: 20px;
+    position: relative;
     width: 100%;
     display: flex;
     justify-content: center;
@@ -495,11 +510,10 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     flex-wrap: wrap;
     align-items: flex-end;
     padding: 0 20px;
-    margin-bottom: 10px;
 }
 
 .opponent-container {
-    position: absolute;
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -601,9 +615,10 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 .my-card-wrapper {
     position: relative;
     margin: 0 3px 6px;
-    transition: transform 0.15s ease;
+    transition: transform 0.15s ease, margin 0.15s ease;
 }
 .my-card-wrapper:hover { transform: translateY(-10px); z-index: 100 !important; }
+.my-card-wrapper .card { transition: width 0.15s ease, height 0.15s ease, font-size 0.15s ease; }
 
 .card {
     width: 65px;
@@ -759,6 +774,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     .hand-fan-card { margin-left: -12px; }
     .opponent-container { font-size: 11px; padding: 5px 9px; gap: 2px; }
     .opponent-container .opp-meta { font-size: 10px; }
+    #opponents-area { padding: 0 8px; gap: 6px; }
     .brand { font-size: 2.2rem; }
     .brand-suit-row { font-size: 1.1rem; margin-bottom: 20px; }
     .landing-card { padding: 20px; }

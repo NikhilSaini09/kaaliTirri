@@ -37,7 +37,9 @@ function renderLobby() {
         const pDiv = document.createElement('div');
         pDiv.className = 'lobby-player-row';
 
-        let html = `<span>${player.name}${player.id === myPeerId ? '<span class="you-tag">YOU</span>' : ''}</span>`;
+        const isPlayerHost = player.name.includes('(Host)');
+        const displayName = cleanPlayerName(player.name);
+        let html = `<span>${isPlayerHost ? '<span title="Host">👑</span> ' : ''}${displayName}${player.id === myPeerId ? '<span class="you-tag">YOU</span>' : ''}</span>`;
         if (isHost && player.id !== myPeerId) {
             html += `<button class="btn-danger" onclick="kickPlayer('${player.id}')" style="padding: 5px 12px; font-size: 13px;">Kick</button>`;
         }
@@ -54,7 +56,10 @@ function renderLobby() {
 let timerBarInterval = null;
 let timerBarDeadline = null;
 
-function startTimerBarLoop(deadline) {
+function startTimerBarLoop(deadline, totalMs, label) {
+    const labelEl = document.getElementById('timer-bar-label');
+    if (labelEl) labelEl.textContent = label || '';
+
     if (timerBarDeadline === deadline && timerBarInterval) return; // already tracking this window
     timerBarDeadline = deadline;
     if (timerBarInterval) clearInterval(timerBarInterval);
@@ -66,7 +71,7 @@ function startTimerBarLoop(deadline) {
     const tick = () => {
         const remainingMs = Math.max(0, deadline - Date.now());
         const remainingSec = Math.ceil(remainingMs / 1000);
-        const pct = Math.max(0, Math.min(100, (remainingMs / BIDDING_TIME_MS) * 100));
+        const pct = Math.max(0, Math.min(100, (remainingMs / totalMs) * 100));
         fill.style.width = `${pct}%`;
         text.textContent = `${remainingSec}s`;
         wrap.classList.toggle('urgent', remainingSec <= 10);
@@ -114,27 +119,48 @@ function renderGameBoard() {
         ? gameState.players[gameState.turnIndex]
         : null;
 
-    // Bidding countdown
+    // Countdown: bidding window, or the current player's 30s turn clock
     if (gameState.phase === 'BIDDING' && gameState.biddingDeadline) {
         timerWrap.classList.add('is-visible');
-        startTimerBarLoop(gameState.biddingDeadline);
+        startTimerBarLoop(gameState.biddingDeadline, BIDDING_TIME_MS, 'Bidding');
+    } else if (gameState.phase === 'PLAYING' && gameState.turnDeadline) {
+        timerWrap.classList.add('is-visible');
+        const turnName = activeTurnPlayer ? cleanPlayerName(activeTurnPlayer.name) : '';
+        const isMe = activeTurnPlayer && activeTurnPlayer.id === myPeerId;
+        startTimerBarLoop(gameState.turnDeadline, TURN_TIME_MS, isMe ? 'Your turn' : `${turnName}'s turn`);
     } else {
         stopTimerBarLoop();
     }
 
-    // 1. Center Board (Played Cards)
+    // Work out each opponent's seat angle up front so played cards can land on their side of the table.
+    const opponents = gameState.players.filter(p => p.id !== myPeerId);
+    const angleStep = Math.PI / (opponents.length + 1);
+    const seatAngles = {};
+    opponents.forEach((player, index) => {
+        seatAngles[player.id] = angleStep * (index + 1);
+    });
+
+    // 1. Center Board (Played Cards) - each card sits toward the side of the table its player occupies
     gameState.board.forEach((card, index) => {
         const cardEl = createCardElement(card, false);
         cardEl.classList.add('played-card');
-        const rotation = (Math.random() * 20 - 10) + (index * 15); // Random spin
-        cardEl.style.transform = `rotate(${rotation}deg)`;
+        const rotation = (Math.random() * 16 - 8);
+        cardEl.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
+
+        let leftPct = 50, topPct = 50;
+        if (card.playedBy === myPeerId) {
+            leftPct = 50; topPct = 76;
+        } else if (seatAngles[card.playedBy] !== undefined) {
+            const angle = seatAngles[card.playedBy];
+            leftPct = 50 - Math.cos(angle) * 27;
+            topPct = 50 - Math.sin(angle) * 27;
+        }
+        cardEl.style.left = `${leftPct}%`;
+        cardEl.style.top = `${topPct}%`;
         boardArea.appendChild(cardEl);
     });
 
     // 2. Opponents (Radial Distribution)
-    const opponents = gameState.players.filter(p => p.id !== myPeerId);
-    const angleStep = Math.PI / (opponents.length + 1);
-
     opponents.forEach((player, index) => {
         const oppDiv = document.createElement('div');
         oppDiv.className = 'opponent-container';
@@ -145,7 +171,8 @@ function renderGameBoard() {
         if (isActiveTurn) oppDiv.classList.add('is-active-turn');
         if (isFolded) oppDiv.classList.add('is-folded');
 
-        let teamIcon = player.team === 'BIDDER_TEAM' ? '🔥' : (player.team === 'DEFENDER_TEAM' ? '🛡️' : '❓');
+        let teamIcon = player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : '');
+        const isPlayerHost = player.name.includes('(Host)');
         const cleanName = cleanPlayerName(player.name);
 
         let pileHtml = '';
@@ -159,8 +186,9 @@ function renderGameBoard() {
         }
 
         oppDiv.innerHTML = `
-            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon} ${cleanName}</span>
+            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${isPlayerHost ? '<span title="Host">👑</span> ' : ''}${teamIcon}${cleanName}</span>
             <span class="opp-meta">${player.hand.length} 🃏 &middot; ${player.points} pts</span>
+            <div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length, 5))}</div>
             ${isFolded ? '<span class="fold-tag">FOLDED</span>' : ''}
             ${pileHtml}
         `;
@@ -174,7 +202,7 @@ function renderGameBoard() {
         }
 
         // Calculate Position
-        const angle = angleStep * (index + 1);
+        const angle = seatAngles[player.id];
         const rx = 40;
         const ry = 30;
         oppDiv.style.left = `${50 - Math.cos(angle) * rx}%`;
@@ -199,10 +227,6 @@ function renderGameBoard() {
             const wrapper = document.createElement('div');
             wrapper.className = 'my-card-wrapper';
 
-            // Apply layer classes based on index (e.g., wrap every 10 cards)
-            const layerClass = `layer-${Math.floor(index / 10)}`;
-            wrapper.classList.add(layerClass);
-
             // z-index ensures cards on the right overlay cards on the left
             wrapper.style.zIndex = index;
 
@@ -213,6 +237,21 @@ function renderGameBoard() {
             wrapper.appendChild(cardEl);
             myArea.appendChild(wrapper);
         });
+
+        // Only overlap the cards as much as is actually needed to fit them - keeps a small hand
+        // spaced out and readable, and a full hand just barely overlapping instead of piled up.
+        const cardWrappers = myArea.querySelectorAll('.my-card-wrapper');
+        if (cardWrappers.length > 0) {
+            const firstCardEl = cardWrappers[0].querySelector('.card');
+            const cardWidth = firstCardEl ? firstCardEl.getBoundingClientRect().width : 65;
+            const availWidth = myArea.clientWidth - 24;
+            const n = cardWrappers.length;
+            let gap = n > 1 ? (availWidth - n * cardWidth) / (n - 1) : 0;
+            gap = Math.max(-cardWidth * 0.68, Math.min(14, gap));
+            cardWrappers.forEach((wrapper, i) => {
+                wrapper.style.marginLeft = i === 0 ? '0px' : `${gap}px`;
+            });
+        }
 
         // Add clickable won pile for the local player if they have won cards
         if (me.wonCards && me.wonCards.length > 0) {
@@ -288,6 +327,7 @@ function renderGameBoard() {
         }
 
         actionOverlay.style.display = showOverlay ? 'flex' : 'none';
+        actionOverlay.classList.toggle('no-dim', gameState.phase === 'BIDDING');
     }
 
     // 6. Game Over Modal
@@ -414,6 +454,7 @@ function openWonCardsModal(player) {
         });
     }
     modal.style.display = 'block';
+    document.getElementById('won-cards-modal-backdrop').style.display = 'block';
 }
 
 // UI Bindings
@@ -457,6 +498,7 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
         gameState.trumpSuit = null;
         gameState.calledCards = [];
         gameState.biddingDeadline = null;
+        gameState.turnDeadline = null;
 
         broadcastState();
     }
@@ -501,9 +543,12 @@ document.getElementById('setTrumpBtn').addEventListener('click', () => {
     else if (hostConnection) hostConnection.send({ type: 'ACTION_SET_TRUMP', suit: suit, cards: chosenCards });
 });
 
-document.getElementById('closeWonCardsBtn')?.addEventListener('click', () => {
+function closeWonCardsModal() {
     document.getElementById('won-cards-modal').style.display = 'none';
-});
+    document.getElementById('won-cards-modal-backdrop').style.display = 'none';
+}
+document.getElementById('closeWonCardsBtn')?.addEventListener('click', closeWonCardsModal);
+document.getElementById('won-cards-modal-backdrop')?.addEventListener('click', closeWonCardsModal);
 
 document.getElementById('hostMenuToggle')?.addEventListener('click', () => {
     const menu = document.getElementById('host-dropdown');
@@ -520,3 +565,5 @@ document.getElementById('hostBackToLobbyBtn')?.addEventListener('click', () => {
 
 document.getElementById('saveBtn')?.addEventListener('click', saveGame);
 document.getElementById('loadInput')?.addEventListener('change', loadGame);
+document.getElementById('hostSaveBtn')?.addEventListener('click', saveGame);
+document.getElementById('hostLoadInput')?.addEventListener('change', loadGame);

@@ -55,6 +55,9 @@
                 <button id="hostMenuToggle" aria-label="Host menu">⚙️</button>
                 <div id="host-dropdown">
                     <button id="hostReshuffleBtn" class="btn-info">Re-Deal</button>
+                    <button id="hostSaveBtn" class="btn-wood">Download Save</button>
+                    <label for="hostLoadInput" class="btn-wood">Load Save</label>
+                    <input type="file" id="hostLoadInput" accept=".json" style="display: none;">
                     <button id="hostBackToLobbyBtn" class="btn-danger">Return to Lobby</button>
                 </div>
             </div>
@@ -62,6 +65,7 @@
 
         <!-- Bidding countdown -->
         <div id="timer-bar-wrap">
+            <span id="timer-bar-label"></span>
             <div id="timer-bar-track"><div id="timer-bar-fill"></div></div>
             <span id="timer-bar-text">30s</span>
         </div>
@@ -121,6 +125,7 @@
             <button id="modalBackToLobbyBtn" class="btn-danger">Return to Lobby</button>
         </div>
 
+        <div id="won-cards-modal-backdrop" style="display: none;"></div>
         <div id="won-cards-modal" style="display: none;">
             <div class="won-cards-header">
                 <h3 id="won-cards-title">Won Cards</h3>

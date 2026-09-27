@@ -102,6 +102,26 @@ button:disabled {
 .btn-wood    { background: linear-gradient(180deg, var(--walnut-700), var(--walnut-800)); color: var(--ivory); }
 .btn-ghost   { background: rgba(255,255,255,0.08); color: var(--ivory); border-color: rgba(255,255,255,0.2); }
 
+/* <label> elements used as buttons (e.g. "Load Save") don't get the base button/input/select
+   box model, so they need it spelled out explicitly or they render undersized and misaligned. */
+label.btn-brass, label.btn-success, label.btn-danger, label.btn-info, label.btn-wood, label.btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 15px;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    border-radius: 8px;
+    border: 1px solid rgba(0,0,0,0.15);
+    cursor: pointer;
+    text-align: center;
+    transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.btn-info:hover, label.btn-wood:hover, label.btn-ghost:hover {
+    transform: translateY(-1px);
+}
+
 .view-container {
     display: flex;
     flex-direction: column;
@@ -230,7 +250,11 @@ button:disabled {
     gap: 10px;
     justify-content: center;
 }
-.lobby-utility-row label { margin: 0; }
+.lobby-utility-row button, .lobby-utility-row label {
+    margin: 0;
+    flex: 1;
+    font-size: 14px;
+}
 
 #view-game {
     width: 100%;
@@ -281,7 +305,7 @@ button:disabled {
     top: 62px;
     left: 50%;
     transform: translateX(-50%);
-    width: min(360px, 80%);
+    width: min(400px, 86%);
     z-index: 90;
     background: rgba(0,0,0,0.4);
     border: 1px solid rgba(255,255,255,0.12);
@@ -291,6 +315,15 @@ button:disabled {
     gap: 10px;
 }
 #timer-bar-wrap.is-visible { display: flex; }
+#timer-bar-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ivory);
+    white-space: nowrap;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 #timer-bar-track {
     flex-grow: 1;
     height: 6px;
@@ -355,6 +388,10 @@ button:disabled {
     z-index: 2000;
     justify-content: center;
     align-items: center;
+    transition: background 0.2s ease;
+}
+#action-overlay.no-dim {
+    background: transparent;
 }
 
 .action-panel {
@@ -421,8 +458,8 @@ button:disabled {
 
 #table-wrapper {
     position: relative;
-    width: min(280px, 46vw);
-    height: min(280px, 46vw);
+    width: min(380px, 62vw);
+    height: min(380px, 62vw);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -476,6 +513,17 @@ button:disabled {
 
 .opponent-container .opp-name { display: flex; align-items: center; gap: 6px; }
 .opponent-container .opp-meta { font-size: 12px; font-weight: 500; opacity: 0.85; }
+
+.hand-fan {
+    display: flex;
+    height: 38px;
+    align-items: flex-end;
+    margin-top: 2px;
+}
+.hand-fan-card {
+    margin-left: -16px;
+}
+.hand-fan-card:first-child { margin-left: 0; }
 
 .is-active-turn {
     border-color: var(--brass-300) !important;
@@ -539,15 +587,9 @@ button:disabled {
 
 .my-card-wrapper {
     position: relative;
-    transition: transform 0.15s ease;
-    margin-left: -35px;
+    transition: transform 0.15s ease, margin-left 0.15s ease;
 }
-.my-card-wrapper:first-child { margin-left: 0; }
 .my-card-wrapper:hover { transform: translateY(-16px); z-index: 100 !important; }
-
-.layer-0 { transform: translateY(0); }
-.layer-1 { transform: translateY(-20px); }
-.layer-2 { transform: translateY(-40px); }
 
 .card {
     width: 65px;
@@ -559,16 +601,16 @@ button:disabled {
     align-items: center;
     font-family: var(--font-display);
     font-size: 22px;
-    font-weight: 600;
+    font-weight: 700;
     box-shadow: -2px 2px 8px rgba(0,0,0,0.4);
-    border: 1px solid rgba(0,0,0,0.15);
+    border: 1.5px solid rgba(0,0,0,0.35);
     user-select: none;
     cursor: pointer;
     flex-shrink: 0;
 }
 
 .red { color: var(--red-suit); }
-.black { color: var(--black-suit); }
+.black { color: #000; }
 
 .played-card {
     position: absolute;
@@ -642,16 +684,23 @@ button:disabled {
 
 #modalBackToLobbyBtn { display: none; width: 100%; margin-top: 12px; }
 
+#won-cards-modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(5,10,8,0.72);
+    z-index: 1999;
+}
 #won-cards-modal {
     position: fixed;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background: var(--walnut-900);
+    background: linear-gradient(180deg, var(--walnut-700), var(--walnut-900));
     color: var(--ivory);
     padding: 22px;
     border-radius: 14px;
-    border: 1px solid var(--brass-700);
+    border: 1px solid var(--brass-500);
     z-index: 2000;
     width: 90%;
     max-width: 550px;
@@ -678,9 +727,42 @@ button:disabled {
 }
 
 @media (max-width: 640px) {
-    .card { width: 52px; height: 76px; font-size: 17px; }
-    .mini-card { width: 20px !important; height: 30px !important; }
-    .opponent-container { font-size: 12px; padding: 6px 10px; }
-    .brand { font-size: 2.4rem; }
-    .landing-card { padding: 24px; }
+    .card { width: 48px; height: 70px; font-size: 15px; border-radius: 6px; }
+    .mini-card { width: 18px !important; height: 27px !important; }
+    .hand-fan { height: 27px; }
+    .hand-fan-card { margin-left: -12px; }
+    .opponent-container { font-size: 11px; padding: 5px 9px; gap: 2px; }
+    .opponent-container .opp-meta { font-size: 10px; }
+    .brand { font-size: 2.2rem; }
+    .brand-suit-row { font-size: 1.1rem; margin-bottom: 20px; }
+    .landing-card { padding: 20px; }
+
+    #view-lobby { padding: 22px; width: 94%; }
+    .lobby-utility-row { flex-direction: column; }
+
+    #game-header { padding: 10px; flex-wrap: wrap; gap: 6px; }
+    .chip { padding: 6px 12px; font-size: 12px; }
+    #game-info { font-size: 12px; }
+
+    #timer-bar-wrap { top: 56px; width: 92%; padding: 5px 10px; gap: 6px; }
+    #timer-bar-label { max-width: 60px; font-size: 10px; }
+    #timer-bar-text { font-size: 11px; min-width: 28px; }
+
+    #table-wrapper { width: min(320px, 78vw); height: min(320px, 78vw); }
+
+    #host-dropdown { min-width: 150px; right: -10px; }
+    #host-dropdown button, #host-dropdown label { font-size: 13px; padding: 8px 12px; }
+
+    .action-panel { padding: 22px; width: 92%; }
+    .action-panel h3 { font-size: 19px; }
+    #bidAmount { font-size: 22px; }
+
+    .my-won-pile { right: 10px; bottom: 14px; font-size: 11px; padding: 6px 10px; }
+    .your-turn-badge { font-size: 11px; padding: 5px 11px; }
+
+    .modal-card { padding: 18px; width: 92%; }
+    .score-columns { gap: 10px; }
+    .score-columns h3 { font-size: 14px; }
+
+    #won-cards-modal { padding: 16px; width: 94%; }
 }

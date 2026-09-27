@@ -16,6 +16,7 @@ function getCardRank(card) {
 const MIN_BID = 130;
 const MAX_BID = 250;
 const BIDDING_TIME_MS = 30000;
+const TURN_TIME_MS = 30000;
 
 // --- State Structure ---
 let gameState = {
@@ -29,7 +30,8 @@ let gameState = {
     trumpSuit: null,      
     calledCards: [],
     spectators: [],
-    biddingDeadline: null // epoch ms; host auto-resolves bidding once this passes
+    biddingDeadline: null, // epoch ms; host auto-resolves bidding once this passes
+    turnDeadline: null     // epoch ms; host auto-plays a card once this passes during PLAYING
 };
 let gameStats = {}; 
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
@@ -101,12 +103,14 @@ function handlePlayCard(playerId, playedCard) {
         if (gameState.board.length === gameState.players.length) {
             // Lock board for evaluation
             gameState.phase = 'TRICK_EVALUATION';
+            gameState.turnDeadline = null;
             setTimeout(() => {
                 evaluateTrick();
                 broadcastState(); // Broadcast after evaluation finishes
             }, 2000);
         } else {
             gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
+            resetTurnTimer();
         }
     }
 }
@@ -139,9 +143,11 @@ function evaluateTrick() {
     gameState.board = []; 
 
     if (gameState.players[0].hand.length === 0) {
+        gameState.turnDeadline = null;
         evaluateRoundEnd();
     } else {
         gameState.phase = 'PLAYING';
+        resetTurnTimer();
     }
 }
 
@@ -223,7 +229,9 @@ function startDeal() {
         p.team = 'UNKNOWN'; // Reset teams
     });
 
-    resetBiddingTimer();
+    // No countdown until the first bid is placed - everyone gets a look at their hand first.
+    gameState.biddingDeadline = null;
+    gameState.turnDeadline = null;
 
     // 6. Deal the playable deck evenly
     let currentPlayer = 0;
@@ -314,6 +322,33 @@ function checkBiddingTimeout() {
 // Ticks once a second; only the host acts on it, but it's harmless to run everywhere.
 setInterval(checkBiddingTimeout, 1000);
 
+// Gives the current player a fresh 30-second window to play a card.
+function resetTurnTimer() {
+    gameState.turnDeadline = Date.now() + TURN_TIME_MS;
+}
+
+function checkTurnTimeout() {
+    if (!isHost) return;
+    if (gameState.phase !== 'PLAYING' || !gameState.turnDeadline) return;
+    if (Date.now() < gameState.turnDeadline) return;
+
+    const player = gameState.players[gameState.turnIndex];
+    if (!player) { gameState.turnDeadline = null; return; }
+
+    // Auto-play a random legal card on the player's behalf so the table isn't stuck.
+    const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
+    const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
+
+    if (cardToPlay) {
+        handlePlayCard(player.id, cardToPlay);
+    } else {
+        gameState.turnDeadline = null;
+    }
+    broadcastState();
+}
+
+setInterval(checkTurnTimeout, 1000);
+
 function handleSetTrump(playerId, suit, calledCardsArray) {
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
 
@@ -325,6 +360,7 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
     gameState.turnIndex = bidderIndex;
     
     gameState.phase = 'PLAYING';
+    resetTurnTimer();
 }
 
 function getSanitizedStateForClient(clientId) {

@@ -129,6 +129,7 @@ document.getElementById('joinBtn').addEventListener('click', () => {
         
         hostConnection.on('open', () => {
             hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
+            document.getElementById('roomIdDisplay').textContent = `Room ID: ${roomId}`;
             switchView('view-lobby');
         });
 

@@ -54,6 +54,7 @@
             <div id="host-controls-wrapper">
                 <button id="hostMenuToggle" aria-label="Host menu">⚙️</button>
                 <div id="host-dropdown">
+                    <button id="hostPauseBtn" class="btn-info">⏸ Pause Game</button>
                     <button id="hostReshuffleBtn" class="btn-info">Re-Deal</button>
                     <button id="hostSaveBtn" class="btn-wood">Download Save</button>
                     <label for="hostLoadInput" class="btn-wood">Load Save</label>
@@ -63,7 +64,8 @@
             </div>
         </div>
 
-        <!-- Countdown / status messages - stacked so they never collide with each other -->
+        <!-- Countdown / status messages - stacked so they never collide with each other,
+             and take up no space at all when neither is showing. -->
         <div id="status-stack">
             <div id="timer-bar-wrap">
                 <span id="timer-bar-label"></span>
@@ -98,12 +100,20 @@
             </div>
         </div>
 
-        <div class="table-zone">
+        <!-- PAUSE OVERLAY -->
+        <div id="pause-overlay" style="display: none;">
+            <div class="pause-card">
+                <h2>⏸ Game Paused</h2>
+                <p>The host has paused the game. Sit tight.</p>
+                <button id="resumeFromOverlayBtn" class="btn-success" style="display: none;">Resume Game</button>
+            </div>
+        </div>
 
-            <div id="opponents-area"></div>
+        <div class="table-zone">
 
             <div id="table-wrapper">
                 <div id="center-board"></div>
+                <div id="opponents-area"></div>
             </div>
 
             <div id="my-area"></div>

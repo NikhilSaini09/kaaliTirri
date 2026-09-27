@@ -32,7 +32,9 @@ let gameState = {
     originalCalledCards: [], // the partner card(s) as chosen - kept even after they're revealed/removed from calledCards
     spectators: [],
     biddingDeadline: null, // epoch ms; host auto-resolves bidding once this passes
-    turnDeadline: null     // epoch ms; host auto-plays a card once this passes during PLAYING
+    turnDeadline: null,    // epoch ms; host auto-plays a card once this passes during PLAYING
+    isPaused: false,
+    pausedRemaining: null
 };
 let gameStats = {}; 
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
@@ -72,6 +74,7 @@ function isCardPlayable(playerId, card) {
 }
 
 function handlePlayCard(playerId, playedCard) {
+    if (gameState.isPaused) return;
     if (!isCardPlayable(playerId, playedCard)) return;
 
     const playerIndex = gameState.players.findIndex(p => p.id === playerId);
@@ -234,6 +237,8 @@ function startDeal() {
     // No countdown until the first bid is placed - everyone gets a look at their hand first.
     gameState.biddingDeadline = null;
     gameState.turnDeadline = null;
+    gameState.isPaused = false;
+    gameState.pausedRemaining = null;
 
     // 6. Deal the playable deck evenly
     let currentPlayer = 0;
@@ -246,6 +251,7 @@ function startDeal() {
 }
 
 function handlePlaceBid(playerId, amount) {
+    if (gameState.isPaused) return { error: "Game is paused." };
     if (gameState.phase !== 'BIDDING') return;
     const player = gameState.players.find(p => p.id === playerId);
     if (!player || player.hasFolded) return { error: "You have already folded." };
@@ -273,6 +279,7 @@ function handlePlaceBid(playerId, amount) {
 }
 
 function handleFold(playerId) {
+    if (gameState.isPaused) return;
     if (gameState.phase !== 'BIDDING') return;
     if (gameState.highestBid.playerId === playerId) return;
 
@@ -299,6 +306,7 @@ function resetBiddingTimer() {
 
 function checkBiddingTimeout() {
     if (!isHost) return;
+    if (gameState.isPaused) return;
     if (gameState.phase !== 'BIDDING' || !gameState.biddingDeadline) return;
     if (Date.now() < gameState.biddingDeadline) return;
 
@@ -331,6 +339,7 @@ function resetTurnTimer() {
 
 function checkTurnTimeout() {
     if (!isHost) return;
+    if (gameState.isPaused) return;
     if (gameState.phase !== 'PLAYING' || !gameState.turnDeadline) return;
     if (Date.now() < gameState.turnDeadline) return;
 
@@ -351,7 +360,38 @@ function checkTurnTimeout() {
 
 setInterval(checkTurnTimeout, 1000);
 
+// Host-only: freezes/unfreezes the game clock and blocks actions while paused.
+// Remaining time on whichever timer is running is preserved across the pause.
+function togglePause() {
+    if (!isHost) return;
+
+    if (!gameState.isPaused) {
+        gameState.pausedRemaining = null;
+        if (gameState.biddingDeadline) {
+            gameState.pausedRemaining = gameState.biddingDeadline - Date.now();
+            gameState.biddingDeadline = null;
+        } else if (gameState.turnDeadline) {
+            gameState.pausedRemaining = gameState.turnDeadline - Date.now();
+            gameState.turnDeadline = null;
+        }
+        gameState.isPaused = true;
+    } else {
+        if (gameState.pausedRemaining !== null && gameState.pausedRemaining !== undefined) {
+            const remaining = Math.max(1000, gameState.pausedRemaining);
+            if (gameState.phase === 'BIDDING') {
+                gameState.biddingDeadline = Date.now() + remaining;
+            } else if (gameState.phase === 'PLAYING') {
+                gameState.turnDeadline = Date.now() + remaining;
+            }
+        }
+        gameState.pausedRemaining = null;
+        gameState.isPaused = false;
+    }
+    broadcastState();
+}
+
 function handleSetTrump(playerId, suit, calledCardsArray) {
+    if (gameState.isPaused) return;
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
 
     gameState.trumpSuit = suit;

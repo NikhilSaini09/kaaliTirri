@@ -114,6 +114,15 @@ function renderGameBoard() {
     document.getElementById('phase-display').innerHTML = `Phase: <span class="phase-label">${PHASE_LABELS[gameState.phase] || gameState.phase}</span>`;
     hostControls.style.display = isHost ? 'block' : 'none';
 
+    // Pause: a host-only toggle that freezes the game clock and blocks every action
+    // until resumed. Shown to everyone so no one is left wondering why nothing moves.
+    const pauseOverlay = document.getElementById('pause-overlay');
+    pauseOverlay.style.display = gameState.isPaused ? 'flex' : 'none';
+    const resumeBtn = document.getElementById('resumeFromOverlayBtn');
+    if (resumeBtn) resumeBtn.style.display = isHost ? 'inline-block' : 'none';
+    const pauseMenuBtn = document.getElementById('hostPauseBtn');
+    if (pauseMenuBtn) pauseMenuBtn.textContent = gameState.isPaused ? '▶ Resume Game' : '⏸ Pause Game';
+
     // Whose turn is it right now (only meaningful once cards are being played)?
     const activeTurnPlayer = (gameState.phase === 'PLAYING' && gameState.players.length > 0)
         ? gameState.players[gameState.turnIndex]
@@ -145,9 +154,9 @@ function renderGameBoard() {
         opponents = gameState.players.slice();
     }
 
-    // Seat angles are only used to land each played card on the side of the table its
-    // player occupies - the chips themselves are laid out with plain flex-wrap below so
-    // they can never overlap, whatever the table size.
+    // Seat angles double as the position for both the opponent chip (drawn just outside
+    // the table's rim) and that player's played card (drawn just inside it) - so a card
+    // always appears on the same side of the table as the person who played it.
     const angleStep = Math.PI / (opponents.length + 1);
     const seatAngles = {};
     opponents.forEach((player, index) => {
@@ -174,8 +183,10 @@ function renderGameBoard() {
         boardArea.appendChild(cardEl);
     });
 
-    // 2. Opponents - plain flex row/wrap in turn order, so seats never collide regardless of count
-    const crowded = opponents.length > 3;
+    // 2. Opponents - positioned in a circle around the table, each seat gently rotated
+    // toward the middle so it reads like people actually sitting around it.
+    const crowded = opponents.length >= 2;
+    const SEAT_RADIUS = 66; // % of the table's own box - just outside the felt's rim
     opponents.forEach((player, index) => {
         const oppDiv = document.createElement('div');
         oppDiv.className = 'opponent-container' + (crowded ? ' compact' : '');
@@ -185,6 +196,15 @@ function renderGameBoard() {
         const isFolded = showFoldState && !!player.hasFolded;
         if (isActiveTurn) oppDiv.classList.add('is-active-turn');
         if (isFolded) oppDiv.classList.add('is-folded');
+
+        const angle = seatAngles[player.id];
+        const leftPct = 50 - Math.cos(angle) * SEAT_RADIUS;
+        const topPct = 50 - Math.sin(angle) * SEAT_RADIUS;
+        const angleDeg = angle * 180 / Math.PI;
+        const tilt = Math.max(-18, Math.min(18, (90 - angleDeg) * 0.35));
+        oppDiv.style.left = `${leftPct}%`;
+        oppDiv.style.top = `${topPct}%`;
+        oppDiv.style.transform = `translate(-50%, -50%) rotate(${tilt}deg)`;
 
         let teamIcon = player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : '');
         const isPlayerHost = player.name.includes('(Host)');
@@ -221,20 +241,22 @@ function renderGameBoard() {
 
     // Panels - visible to players and spectators alike, so this runs regardless of "me"
     if (gameState.phase !== 'LOBBY') {
-        gameInfo.style.display = 'block';
+        gameInfo.style.display = 'inline-flex';
         if (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION') {
             document.getElementById('bid-info').innerHTML = `High Bid: <b>${gameState.highestBid.amount || '—'}</b> (${gameState.highestBid.playerName ? cleanPlayerName(gameState.highestBid.playerName) : 'None yet'})`;
             document.getElementById('trump-info').innerHTML = '';
         } else {
             document.getElementById('bid-info').innerHTML = `Target: <b>${gameState.highestBid.amount}</b> (${cleanPlayerName(gameState.highestBid.playerName)})`;
-            let trumpHtml = `Trump: <b class="${gameState.trumpSuit === '♥' || gameState.trumpSuit === '♦' ? 'red' : 'black'}">${gameState.trumpSuit}</b>`;
+            const trumpColor = (gameState.trumpSuit === '♥' || gameState.trumpSuit === '♦') ? 'red' : 'black';
+            let trumpHtml = `Trump: <span class="trump-suit-display ${trumpColor}">${gameState.trumpSuit}</span>`;
             if (gameState.originalCalledCards && gameState.originalCalledCards.length > 0) {
                 const partnerHtml = gameState.originalCalledCards.map(c => {
                     const suit = c.slice(-1);
+                    const rank = c.slice(0, -1);
                     const cls = (suit === '♥' || suit === '♦') ? 'red' : 'black';
-                    return `<b class="${cls}">${c}</b>`;
-                }).join(', ');
-                trumpHtml += ` &middot; Partner: ${partnerHtml}`;
+                    return `<span class="partner-card-chip ${cls}"><span class="pcc-rank">${rank}</span><span class="pcc-suit">${suit}</span></span>`;
+                }).join('');
+                trumpHtml += `<span class="partner-label">Partner:</span><span class="partner-cards-row">${partnerHtml}</span>`;
             }
             document.getElementById('trump-info').innerHTML = trumpHtml;
         }
@@ -527,6 +549,8 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
         gameState.originalCalledCards = [];
         gameState.biddingDeadline = null;
         gameState.turnDeadline = null;
+        gameState.isPaused = false;
+        gameState.pausedRemaining = null;
 
         broadcastState();
     }
@@ -599,6 +623,13 @@ document.addEventListener('click', (e) => {
 document.getElementById('hostReshuffleBtn')?.addEventListener('click', () => {
     if(isHost) { startDeal(); broadcastState(); }
     closeHostMenu();
+});
+document.getElementById('hostPauseBtn')?.addEventListener('click', () => {
+    if (isHost) { togglePause(); }
+    closeHostMenu();
+});
+document.getElementById('resumeFromOverlayBtn')?.addEventListener('click', () => {
+    if (isHost) { togglePause(); }
 });
 document.getElementById('hostBackToLobbyBtn')?.addEventListener('click', () => {
     if(isHost) { document.getElementById('modalBackToLobbyBtn').click(); }

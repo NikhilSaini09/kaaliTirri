@@ -13,6 +13,10 @@ function getCardRank(card) {
     return values.indexOf(card.value);
 }
 
+const MIN_BID = 130;
+const MAX_BID = 250;
+const BIDDING_TIME_MS = 30000;
+
 // --- State Structure ---
 let gameState = {
     phase: 'LOBBY',       // LOBBY, BIDDING, TRUMP_SELECTION, PLAYING, TRICK_EVALUATION, GAMEOVER
@@ -24,7 +28,8 @@ let gameState = {
     highestBid: { playerId: null, amount: 0, playerName: "" },
     trumpSuit: null,      
     calledCards: [],
-    spectators: []
+    spectators: [],
+    biddingDeadline: null // epoch ms; host auto-resolves bidding once this passes
 };
 let gameStats = {}; 
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
@@ -176,9 +181,9 @@ function evaluateRoundEnd() {
 }
 
 function startDeal() {
-    gameState.deck = generateDeck();
-    shuffle(gameState.deck);
-    shuffle(gameState.deck);
+    let fullDeck = generateDeck();
+    shuffle(fullDeck);
+    shuffle(fullDeck);
 
     const numPlayers = gameState.players.length;
     if(numPlayers === 0) return;
@@ -201,7 +206,7 @@ function startDeal() {
 
     const cardsToEvict = evictionList.slice(0, cardsToRemoveCount);
 
-    gameState.deck = gameState.deck.filter(card => !cardsToEvict.includes(`${card.value}${card.suit}`));
+    gameState.deck = fullDeck.filter(card => !cardsToEvict.includes(`${card.value}${card.suit}`));
     shuffle(gameState.deck);
     shuffle(gameState.deck);
     
@@ -218,6 +223,8 @@ function startDeal() {
         p.team = 'UNKNOWN'; // Reset teams
     });
 
+    resetBiddingTimer();
+
     // 6. Deal the playable deck evenly
     let currentPlayer = 0;
     while (gameState.deck.length > 0) {
@@ -230,19 +237,25 @@ function startDeal() {
 
 function handlePlaceBid(playerId, amount) {
     if (gameState.phase !== 'BIDDING') return;
-    const amt = parseInt(amount);
+    const player = gameState.players.find(p => p.id === playerId);
+    if (!player || player.hasFolded) return { error: "You have already folded." };
 
-    if (amt % 5 !== 0) {
-        // We throw an error that the UI can catch, or handle silently
-        return { error: "Bid must be a multiple of 5." }; 
+    const amt = parseInt(amount);
+    if (isNaN(amt) || amt % 5 !== 0) {
+        return { error: "Bid must be a multiple of 5." };
     }
-    
+    if (amt < MIN_BID || amt > MAX_BID) {
+        return { error: `Bid must be between ${MIN_BID} and ${MAX_BID}.` };
+    }
+
     if (amt > gameState.highestBid.amount) {
-        const player = gameState.players.find(p => p.id === playerId);
         gameState.highestBid = { playerId: playerId, amount: amt, playerName: player.name };
+        resetBiddingTimer(); // a new high bid gives everyone else a fresh window to respond
+
         const activePlayers = gameState.players.filter(p => !p.hasFolded);
-        if (activePlayers.length === 1) {
+        if (activePlayers.length === 1 || amt === MAX_BID) {
             gameState.phase = 'TRUMP_SELECTION';
+            gameState.biddingDeadline = null;
         }
         return { success: true };
     }
@@ -265,8 +278,41 @@ function handleFold(playerId) {
     }
     if (activePlayers.length === 1 && gameState.highestBid.playerId !== null) {
         gameState.phase = 'TRUMP_SELECTION';
+        gameState.biddingDeadline = null;
     }
 }
+
+// Gives the table a fresh 30-second window to bid or fold.
+function resetBiddingTimer() {
+    gameState.biddingDeadline = Date.now() + BIDDING_TIME_MS;
+}
+
+function checkBiddingTimeout() {
+    if (!isHost) return;
+    if (gameState.phase !== 'BIDDING' || !gameState.biddingDeadline) return;
+    if (Date.now() < gameState.biddingDeadline) return;
+
+    if (gameState.highestBid.playerId === null) {
+        // Nobody bid at all in time — hand a random active player the minimum bid.
+        const active = gameState.players.filter(p => !p.hasFolded);
+        if (active.length === 0) { startDeal(); broadcastState(); return; }
+        const randomPlayer = active[Math.floor(Math.random() * active.length)];
+        gameState.highestBid = { playerId: randomPlayer.id, amount: MIN_BID, playerName: randomPlayer.name };
+        gameState.phase = 'TRUMP_SELECTION';
+    } else {
+        // Everyone who hasn't matched the high bid is timed out and folded.
+        gameState.players.forEach(p => {
+            if (p.id !== gameState.highestBid.playerId && !p.hasFolded) p.hasFolded = true;
+        });
+        gameState.phase = 'TRUMP_SELECTION';
+    }
+
+    gameState.biddingDeadline = null;
+    broadcastState();
+}
+
+// Ticks once a second; only the host acts on it, but it's harmless to run everywhere.
+setInterval(checkBiddingTimeout, 1000);
 
 function handleSetTrump(playerId, suit, calledCardsArray) {
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;

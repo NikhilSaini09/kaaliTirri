@@ -10,6 +10,15 @@ function switchView(viewId) {
     document.getElementById(viewId).style.display = 'flex';
 }
 
+const PHASE_LABELS = {
+    LOBBY: 'Lobby',
+    BIDDING: 'Bidding',
+    TRUMP_SELECTION: 'Choosing Trump',
+    PLAYING: 'Playing',
+    TRICK_EVALUATION: 'Evaluating Trick',
+    GAMEOVER: 'Round Over'
+};
+
 function renderState() {
     if (gameState.phase === 'LOBBY') {
         switchView('view-lobby');
@@ -26,17 +35,13 @@ function renderLobby() {
 
     gameState.players.forEach(player => {
         const pDiv = document.createElement('div');
-        pDiv.style.display = 'flex';
-        pDiv.style.justifyContent = 'space-between';
-        pDiv.style.alignItems = 'center';
-        pDiv.style.padding = '10px';
-        pDiv.style.background = 'rgba(0,0,0,0.4)';
-        
-        let html = `<span>${player.name} ${player.id === myPeerId ? '(You)' : ''}</span>`;
+        pDiv.className = 'lobby-player-row';
+
+        let html = `<span>${player.name}${player.id === myPeerId ? '<span class="you-tag">YOU</span>' : ''}</span>`;
         if (isHost && player.id !== myPeerId) {
-            html += `<button onclick="kickPlayer('${player.id}')" style="background: red; color: white; border: none; padding: 5px 10px; cursor: pointer;">Kick</button>`;
+            html += `<button class="btn-danger" onclick="kickPlayer('${player.id}')" style="padding: 5px 12px; font-size: 13px;">Kick</button>`;
         }
-        
+
         pDiv.innerHTML = html;
         lobbyDiv.appendChild(pDiv);
     });
@@ -44,6 +49,45 @@ function renderLobby() {
     if (isHost) {
         document.getElementById('startGameBtn').style.display = gameState.players.length >= 2 ? 'block' : 'none';
     }
+}
+
+let timerBarInterval = null;
+let timerBarDeadline = null;
+
+function startTimerBarLoop(deadline) {
+    if (timerBarDeadline === deadline && timerBarInterval) return; // already tracking this window
+    timerBarDeadline = deadline;
+    if (timerBarInterval) clearInterval(timerBarInterval);
+
+    const wrap = document.getElementById('timer-bar-wrap');
+    const fill = document.getElementById('timer-bar-fill');
+    const text = document.getElementById('timer-bar-text');
+
+    const tick = () => {
+        const remainingMs = Math.max(0, deadline - Date.now());
+        const remainingSec = Math.ceil(remainingMs / 1000);
+        const pct = Math.max(0, Math.min(100, (remainingMs / BIDDING_TIME_MS) * 100));
+        fill.style.width = `${pct}%`;
+        text.textContent = `${remainingSec}s`;
+        wrap.classList.toggle('urgent', remainingSec <= 10);
+        if (remainingMs <= 0) {
+            clearInterval(timerBarInterval);
+            timerBarInterval = null;
+        }
+    };
+    tick();
+    timerBarInterval = setInterval(tick, 250);
+}
+
+function stopTimerBarLoop() {
+    if (timerBarInterval) clearInterval(timerBarInterval);
+    timerBarInterval = null;
+    timerBarDeadline = null;
+    document.getElementById('timer-bar-wrap').classList.remove('is-visible', 'urgent');
+}
+
+function cleanPlayerName(name) {
+    return name.replace(' (Host)', '').replace(' (Spectator)', '');
 }
 
 function renderGameBoard() {
@@ -58,10 +102,25 @@ function renderGameBoard() {
     const biddingPanel = document.getElementById('bidding-panel');
     const trumpPanel = document.getElementById('trump-panel');
     const teamCardsContainer = document.getElementById('team-cards-container');
-    
+    const timerWrap = document.getElementById('timer-bar-wrap');
+    const foldBanner = document.getElementById('fold-banner');
+
     myArea.innerHTML = ''; boardArea.innerHTML = ''; oppArea.innerHTML = '';
-    document.getElementById('phase-display').textContent = `Phase: ${gameState.phase}`;
+    document.getElementById('phase-display').innerHTML = `Phase: <span class="phase-label">${PHASE_LABELS[gameState.phase] || gameState.phase}</span>`;
     hostControls.style.display = isHost ? 'block' : 'none';
+
+    // Whose turn is it right now (only meaningful once cards are being played)?
+    const activeTurnPlayer = (gameState.phase === 'PLAYING' && gameState.players.length > 0)
+        ? gameState.players[gameState.turnIndex]
+        : null;
+
+    // Bidding countdown
+    if (gameState.phase === 'BIDDING' && gameState.biddingDeadline) {
+        timerWrap.classList.add('is-visible');
+        startTimerBarLoop(gameState.biddingDeadline);
+    } else {
+        stopTimerBarLoop();
+    }
 
     // 1. Center Board (Played Cards)
     gameState.board.forEach((card, index) => {
@@ -80,26 +139,32 @@ function renderGameBoard() {
         const oppDiv = document.createElement('div');
         oppDiv.className = 'opponent-container';
         oppDiv.style.pointerEvents = 'auto';
-        
+
+        const isActiveTurn = activeTurnPlayer && activeTurnPlayer.id === player.id;
+        const isFolded = !!player.hasFolded;
+        if (isActiveTurn) oppDiv.classList.add('is-active-turn');
+        if (isFolded) oppDiv.classList.add('is-folded');
+
         let teamIcon = player.team === 'BIDDER_TEAM' ? '🔥' : (player.team === 'DEFENDER_TEAM' ? '🛡️' : '❓');
-        const cleanName = player.name;
-        
+        const cleanName = cleanPlayerName(player.name);
+
         let pileHtml = '';
         if (player.wonCards && player.wonCards.length > 0) {
             pileHtml = `
                 <div class="won-pile-btn" title="Click to view won cards">
                     <div class="card face-down mini-card"></div>
-                    <span style="font-size: 11px;">${player.wonCards.length} won</span>
+                    <span>${player.wonCards.length} won</span>
                 </div>
             `;
         }
 
         oppDiv.innerHTML = `
-            <span>${teamIcon} ${cleanName}</span>
-            <span style="font-size:12px;">(${player.hand.length} 🃏, ${player.points} pts)</span>
+            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon} ${cleanName}</span>
+            <span class="opp-meta">${player.hand.length} 🃏 &middot; ${player.points} pts</span>
+            ${isFolded ? '<span class="fold-tag">FOLDED</span>' : ''}
             ${pileHtml}
         `;
-        
+
         const pileBtn = oppDiv.querySelector('.won-pile-btn');
         if (pileBtn) {
             pileBtn.addEventListener('click', (e) => {
@@ -122,21 +187,29 @@ function renderGameBoard() {
     // 3. Local Player
     const me = gameState.players.find(p => p.id === myPeerId);
     if (me) {
+        const isMyTurn = activeTurnPlayer && activeTurnPlayer.id === me.id;
+        if (isMyTurn) {
+            const badge = document.createElement('div');
+            badge.className = 'your-turn-badge';
+            badge.innerHTML = '<span class="turn-dot"></span> Your Turn';
+            myArea.appendChild(badge);
+        }
+
         me.hand.forEach((card, index) => {
             const wrapper = document.createElement('div');
             wrapper.className = 'my-card-wrapper';
-            
+
             // Apply layer classes based on index (e.g., wrap every 10 cards)
             const layerClass = `layer-${Math.floor(index / 10)}`;
             wrapper.classList.add(layerClass);
-            
+
             // z-index ensures cards on the right overlay cards on the left
             wrapper.style.zIndex = index;
 
             const playable = isCardPlayable(myPeerId, card);
             const cardEl = createCardElement(card, true, playable);
             if (playable) cardEl.addEventListener('click', () => requestPlayCard(card));
-            
+
             wrapper.appendChild(cardEl);
             myArea.appendChild(wrapper);
         });
@@ -154,14 +227,22 @@ function renderGameBoard() {
             myArea.appendChild(myPileDiv);
         }
 
+        // Fold status banner for the local player
+        if (me.hasFolded && (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION')) {
+            foldBanner.textContent = "You folded — waiting for the rest of the table";
+            foldBanner.style.display = 'block';
+        } else {
+            foldBanner.style.display = 'none';
+        }
+
         // Panels
         if (gameState.phase !== 'LOBBY') {
             gameInfo.style.display = 'block';
             if (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION') {
-                document.getElementById('bid-info').innerHTML = `High Bid: <b>${gameState.highestBid.amount}</b> (${gameState.highestBid.playerName || 'None'})`;
+                document.getElementById('bid-info').innerHTML = `High Bid: <b>${gameState.highestBid.amount || '—'}</b> (${gameState.highestBid.playerName ? cleanPlayerName(gameState.highestBid.playerName) : 'None yet'})`;
                 document.getElementById('trump-info').innerHTML = '';
             } else {
-                document.getElementById('bid-info').innerHTML = `Target: <b>${gameState.highestBid.amount}</b> (${gameState.highestBid.playerName})`;
+                document.getElementById('bid-info').innerHTML = `Target: <b>${gameState.highestBid.amount}</b> (${cleanPlayerName(gameState.highestBid.playerName)})`;
                 document.getElementById('trump-info').innerHTML = `Cart: <b class="${gameState.trumpSuit === '♥' || gameState.trumpSuit === '♦' ? 'red' : 'black'}">${gameState.trumpSuit}</b>`;
             }
         }
@@ -174,34 +255,33 @@ function renderGameBoard() {
         if (gameState.phase === 'BIDDING' && !me.hasFolded) {
             showOverlay = true;
             biddingPanel.style.display = 'flex';
-            
-            const minBid = Math.max(80, gameState.highestBid.amount + 5);
-            document.getElementById('bidAmount').min = minBid;
-            document.getElementById('bidAmount').placeholder = `>= ${minBid}`;
-            
+
+            const minBid = Math.max(MIN_BID, gameState.highestBid.amount + 5);
+            const bidInput = document.getElementById('bidAmount');
+            bidInput.min = minBid;
+            bidInput.max = MAX_BID;
+            bidInput.placeholder = `${minBid}\u2013${MAX_BID}`;
+
             // Set default value automatically to make bidding faster
-            document.getElementById('bidAmount').value = minBid;
-        } 
+            bidInput.value = minBid;
+        }
         else if (gameState.phase === 'TRUMP_SELECTION' && gameState.highestBid.playerId === myPeerId) {
             showOverlay = true;
             trumpPanel.style.display = 'flex';
-            
-            teamCardsContainer.innerHTML = ''; 
+
+            teamCardsContainer.innerHTML = '';
             let allowedCards = Math.floor((gameState.players.length - 2) / 2);
             for (let i = 0; i < allowedCards; i++) {
                 const selectorDiv = document.createElement('div');
-                selectorDiv.style.display = 'flex'; selectorDiv.style.gap = '10px';
-                
+
                 const rankSelect = document.createElement('select');
                 rankSelect.className = 'team-rank-select';
-                rankSelect.style.flexGrow = '1';
                 values.forEach(v => rankSelect.appendChild(new Option(v, v)));
-                
+
                 const suitSelect = document.createElement('select');
                 suitSelect.className = 'team-suit-select';
-                suitSelect.style.flexGrow = '1';
                 suits.forEach(s => suitSelect.appendChild(new Option(s, s)));
-                
+
                 selectorDiv.appendChild(rankSelect); selectorDiv.appendChild(suitSelect);
                 teamCardsContainer.appendChild(selectorDiv);
             }
@@ -214,26 +294,26 @@ function renderGameBoard() {
     if (gameState.phase === 'GAMEOVER') {
         scorecard.style.display = 'block';
         modalBtn.style.display = isHost ? 'block' : 'none';
-        
+
         let bTeamHtml = ''; let bTotal = 0;
         let dTeamHtml = ''; let dTotal = 0;
-        
+
         gameState.players.forEach(p => {
             if (p.team === 'BIDDER_TEAM') {
-                bTeamHtml += `<div>${p.name}: ${p.points}</div>`;
+                bTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
                 bTotal += p.points;
             } else {
-                dTeamHtml += `<div>${p.name}: ${p.points}</div>`;
+                dTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
                 dTotal += p.points;
             }
         });
-        
+
         document.getElementById('bidder-stats').innerHTML = bTeamHtml;
         document.getElementById('defender-stats').innerHTML = dTeamHtml;
         document.getElementById('bidder-total').textContent = bTotal;
         document.getElementById('defender-total').textContent = dTotal;
         document.getElementById('bid-target').textContent = gameState.highestBid.amount;
-        
+
         const won = bTotal >= gameState.highestBid.amount;
         document.getElementById('score-title').textContent = won ? "Bidder Team WON! 🎉" : "Bidder Team LOST! ❌";
         document.getElementById('score-title').style.color = won ? "#4CAF50" : "#f44336";
@@ -246,7 +326,7 @@ function createCardElement(card, isClickable, isPlayable = true) {
     const cardEl = document.createElement('div');
     cardEl.className = `card ${card.suit === '♥' || card.suit === '♦' ? 'red' : 'black'}`;
     cardEl.textContent = `${card.value}${card.suit}`;
-    
+
     if (isClickable && !isPlayable) {
         cardEl.style.opacity = '0.5';
         cardEl.style.cursor = 'not-allowed';
@@ -256,7 +336,7 @@ function createCardElement(card, isClickable, isPlayable = true) {
 
 function requestPlayCard(card) {
     if (!isCardPlayable(myPeerId, card)) { alert("You cannot play this card."); return; }
-    if (isHost) { handlePlayCard(myPeerId, card); broadcastState(); } 
+    if (isHost) { handlePlayCard(myPeerId, card); broadcastState(); }
     else if (hostConnection) hostConnection.send({ type: 'ACTION_PLAY_CARD', card: card });
 }
 
@@ -265,10 +345,10 @@ function saveGame() {
         gameState: gameState,
         gameStats: gameStats
     };
-    
+
     const dataStr = JSON.stringify(payload, null, 2);
     const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
-    
+
     const linkElement = document.createElement('a');
     linkElement.setAttribute('href', dataUri);
     linkElement.setAttribute('download', `kalli_tilli_backup_${Date.now()}.json`);
@@ -288,11 +368,11 @@ function loadGame(event) {
     reader.onload = function(e) {
         try {
             const parsed = JSON.parse(e.target.result);
-            
+
             if (parsed.gameState) {
                 // Preserve current network IDs while taking game state data
                 const currentConnections = gameState.players.map(p => ({ id: p.id, name: p.name }));
-                
+
                 gameState = parsed.gameState;
                 gameStats = parsed.gameStats || {};
 
@@ -319,11 +399,11 @@ function openWonCardsModal(player) {
     const modal = document.getElementById('won-cards-modal');
     const title = document.getElementById('won-cards-title');
     const list = document.getElementById('won-cards-list');
-    
-    const cleanName = player.name.replace(" (Host)", "").replace(" (Spectator)", "");
+
+    const cleanName = cleanPlayerName(player.name);
     title.textContent = `${cleanName}'s Won Cards (${player.wonCards ? player.wonCards.length : 0} cards, ${player.points} pts)`;
     list.innerHTML = '';
-    
+
     if (!player.wonCards || player.wonCards.length === 0) {
         list.innerHTML = '<p style="color: #aaa; margin: auto;">No tricks won yet.</p>';
     } else {
@@ -344,7 +424,7 @@ document.getElementById('startGameBtn').addEventListener('click', () => {
 document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
     if (isHost) {
         gameState.phase = 'LOBBY';
-        
+
         // Merge any spectators into active players
         if (gameState.spectators && gameState.spectators.length > 0) {
             gameState.spectators.forEach(s => {
@@ -376,6 +456,7 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
         gameState.highestBid = { playerId: null, amount: 0, playerName: "" };
         gameState.trumpSuit = null;
         gameState.calledCards = [];
+        gameState.biddingDeadline = null;
 
         broadcastState();
     }
@@ -384,9 +465,9 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
 document.getElementById('submitBidBtn').addEventListener('click', () => {
     const bidInput = document.getElementById('bidAmount');
     const bid = bidInput.value;
-    
+
     if (!bid || bid === "") return;
-    
+
     if (isHost) { 
         const res = handlePlaceBid(myPeerId, bid); 
         if (res && res.error) {
@@ -398,7 +479,6 @@ document.getElementById('submitBidBtn').addEventListener('click', () => {
     else if (hostConnection) {
         hostConnection.send({ type: 'ACTION_PLACE_BID', amount: bid });
     }
-    bidInput.value = ''; 
 });
 
 document.getElementById('foldBtn').addEventListener('click', () => {
@@ -412,11 +492,11 @@ document.getElementById('setTrumpBtn').addEventListener('click', () => {
     const ranks = document.querySelectorAll('.team-rank-select');
     const suits = document.querySelectorAll('.team-suit-select');
     let chosenCards = [];
-    
+
     for (let i = 0; i < ranks.length; i++) {
         chosenCards.push(`${ranks[i].value}${suits[i].value}`);
     }
-    
+
     if (isHost) { handleSetTrump(myPeerId, suit, chosenCards); broadcastState(); }
     else if (hostConnection) hostConnection.send({ type: 'ACTION_SET_TRUMP', suit: suit, cards: chosenCards });
 });
@@ -435,7 +515,7 @@ document.getElementById('hostReshuffleBtn')?.addEventListener('click', () => {
     if(isHost) { startDeal(); broadcastState(); }
 });
 document.getElementById('hostBackToLobbyBtn')?.addEventListener('click', () => {
-    if(isHost) { document.getElementById('modalBackToLobbyBtn').click(); } // Re-use existing logic
+    if(isHost) { document.getElementById('modalBackToLobbyBtn').click(); }
 });
 
 document.getElementById('saveBtn')?.addEventListener('click', saveGame);

@@ -178,6 +178,9 @@ function renderGameBoard() {
             const minBid = Math.max(80, gameState.highestBid.amount + 5);
             document.getElementById('bidAmount').min = minBid;
             document.getElementById('bidAmount').placeholder = `>= ${minBid}`;
+            
+            // Set default value automatically to make bidding faster
+            document.getElementById('bidAmount').value = minBid;
         } 
         else if (gameState.phase === 'TRUMP_SELECTION' && gameState.highestBid.playerId === myPeerId) {
             showOverlay = true;
@@ -204,7 +207,6 @@ function renderGameBoard() {
             }
         }
 
-        // Display the dark fullscreen background only if a panel is active
         actionOverlay.style.display = showOverlay ? 'flex' : 'none';
     }
 
@@ -337,10 +339,6 @@ function openWonCardsModal(player) {
 // UI Bindings
 document.getElementById('startGameBtn').addEventListener('click', () => {
     if (isHost) { startDeal(); broadcastState(); }
-});
-
-document.getElementById('backToLobbyBtn').addEventListener('click', () => {
-    if (isHost) { document.getElementById('modalBackToLobbyBtn').click(); }
 });
 
 document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {

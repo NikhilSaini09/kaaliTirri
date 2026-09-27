@@ -176,7 +176,8 @@ function evaluateRoundEnd() {
 }
 
 function startDeal() {
-    let fullDeck = generateDeck();
+    gameState.deck = generateDeck();
+    shuffle(gameState.deck);
     shuffle(gameState.deck);
 
     const numPlayers = gameState.players.length;
@@ -200,7 +201,7 @@ function startDeal() {
 
     const cardsToEvict = evictionList.slice(0, cardsToRemoveCount);
 
-    gameState.deck = fullDeck.filter(card => !cardsToEvict.includes(`${card.value}${card.suit}`));
+    gameState.deck = gameState.deck.filter(card => !cardsToEvict.includes(`${card.value}${card.suit}`));
     shuffle(gameState.deck);
     shuffle(gameState.deck);
     

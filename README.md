@@ -24,6 +24,8 @@ Kaali Tirri is a trick-taking game with dynamic team alliances and an open biddi
 * **Firewall Bypass:** Utilizes Google STUN and OpenRelay TURN servers to ensure connections succeed across strict mobile hotspots and corporate networks.
 * **Anti-Cheat Architecture:** The game state is sanitized before broadcasting. Opponents' hands are hidden at the memory level to prevent cheating via the browser console.
 * **Host-Controlled Seating:** In the waiting room the host sees a tick box next to every name (everyone starts ticked). Un-tick anyone, including the host, and they join the next game as a spectator; the ticked players are dealt in. Spectators stay spectators when the room returns to the lobby (shown un-ticked), so the host can tick them back in for the next game.
+* **Turn Order Control:** The host can nudge anyone up or down with the arrow buttons in the waiting room. That order becomes the seating and turn order for the next game.
+* **Disconnect Detection:** A player who closes their tab sends a final "leave" message to the host (with the connection-close event as a fallback). They stay listed in the waiting room, tagged `DISCONNECTED`, are never dealt in, and are dropped when the next game starts (the host can also kick them).
 * **Local State Management:** Games can be paused, downloaded as a JSON save file, and reloaded to resume a session later.
 * **Persistent Statistics:** Tracks wins, losses, and total games played across sessions using the save file ledger.
 

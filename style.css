@@ -265,6 +265,29 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     border: 1px solid rgba(255,255,255,0.2);
     border-radius: 999px;
 }
+.lobby-row-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+}
+.move-btn {
+    padding: 4px 9px;
+    font-size: 12px;
+    line-height: 1;
+    margin: 0;
+    border: 1px solid var(--brass-700);
+}
+.move-btn:disabled { opacity: 0.3; cursor: default; }
+.disconnected-tag {
+    color: var(--danger-bright);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 7px;
+    border: 1px solid var(--danger);
+    border-radius: 999px;
+}
 .lobby-summary {
     margin-top: 14px;
     font-size: 13px;

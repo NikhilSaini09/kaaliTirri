@@ -36,8 +36,9 @@ function renderLobby() {
     const excluded = new Set(gameState.excludedIds || []);
     const members = getLobbyMembers();
 
-    members.forEach(member => {
-        const isOut = excluded.has(member.id);
+    members.forEach((member, index) => {
+        const isGone = isDisconnected(member.id);
+        const isOut = isGone || excluded.has(member.id);
 
         const row = document.createElement('div');
         row.className = 'lobby-player-row' + (isOut ? ' is-sitting-out' : '');
@@ -48,9 +49,13 @@ function renderLobby() {
         if (isHost) {
             const check = document.createElement('input');
             check.type = 'checkbox';
+            check.id = `seat-${member.id}`;
+            check.name = `seat-${member.id}`;
             check.className = 'seat-check';
             check.checked = !isOut;
-            check.title = isOut ? 'Click to let them play' : 'Click to make them a spectator';
+            check.disabled = isGone;
+            check.setAttribute('aria-label', `${cleanPlayerName(member.name)} plays next game`);
+            check.title = isGone ? 'Disconnected' : (isOut ? 'Click to let them play' : 'Click to make them a spectator');
             check.addEventListener('change', () => toggleSeat(member.id));
             main.appendChild(check);
         }
@@ -65,7 +70,12 @@ function renderLobby() {
             you.textContent = 'YOU';
             main.appendChild(you);
         }
-        if (isOut) {
+        if (isGone) {
+            const tag = document.createElement('span');
+            tag.className = 'disconnected-tag';
+            tag.textContent = 'DISCONNECTED';
+            main.appendChild(tag);
+        } else if (isOut) {
             const tag = document.createElement('span');
             tag.className = 'spectating-tag';
             tag.textContent = 'SPECTATING';
@@ -73,23 +83,49 @@ function renderLobby() {
         }
         row.appendChild(main);
 
-        if (isHost && member.id !== myPeerId) {
-            const kick = document.createElement('button');
-            kick.className = 'btn-danger';
-            kick.style.cssText = 'padding: 5px 12px; font-size: 13px;';
-            kick.textContent = 'Kick';
-            kick.addEventListener('click', () => kickPlayer(member.id));
-            row.appendChild(kick);
+        if (isHost) {
+            const controls = document.createElement('div');
+            controls.className = 'lobby-row-controls';
+
+            const up = document.createElement('button');
+            up.className = 'btn-wood move-btn';
+            up.textContent = '\u25B2';
+            up.setAttribute('aria-label', 'Move up');
+            up.disabled = index === 0;
+            up.addEventListener('click', () => moveMember(member.id, -1));
+
+            const down = document.createElement('button');
+            down.className = 'btn-wood move-btn';
+            down.textContent = '\u25BC';
+            down.setAttribute('aria-label', 'Move down');
+            down.disabled = index === members.length - 1;
+            down.addEventListener('click', () => moveMember(member.id, 1));
+
+            controls.appendChild(up);
+            controls.appendChild(down);
+
+            if (member.id !== myPeerId) {
+                const kick = document.createElement('button');
+                kick.className = 'btn-danger';
+                kick.style.cssText = 'padding: 5px 12px; font-size: 13px;';
+                kick.textContent = 'Kick';
+                kick.addEventListener('click', () => kickPlayer(member.id));
+                controls.appendChild(kick);
+            }
+            row.appendChild(controls);
         }
 
         lobbyDiv.appendChild(row);
     });
 
-    const outCount = members.filter(m => excluded.has(m.id)).length;
-    const seatedCount = members.length - outCount;
+    const goneCount = members.filter(m => isDisconnected(m.id)).length;
+    const outCount = members.filter(m => !isDisconnected(m.id) && excluded.has(m.id)).length;
+    const seatedCount = members.length - goneCount - outCount;
 
     const summary = document.getElementById('lobby-summary');
-    summary.textContent = `${seatedCount} playing` + (outCount ? ` \u00b7 ${outCount} spectating` : '');
+    summary.textContent = `${seatedCount} playing`
+        + (outCount ? ` \u00b7 ${outCount} spectating` : '')
+        + (goneCount ? ` \u00b7 ${goneCount} disconnected` : '');
 
     if (isHost) {
         document.getElementById('startGameBtn').style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
@@ -433,10 +469,16 @@ function renderGameBoard() {
 
                 const rankSelect = document.createElement('select');
                 rankSelect.className = 'team-rank-select';
+                rankSelect.id = `team-rank-${i}`;
+                rankSelect.name = `team-rank-${i}`;
+                rankSelect.setAttribute('aria-label', `Partner card ${i + 1} rank`);
                 values.forEach(v => rankSelect.appendChild(new Option(v, v)));
 
                 const suitSelect = document.createElement('select');
                 suitSelect.className = 'team-suit-select';
+                suitSelect.id = `team-suit-${i}`;
+                suitSelect.name = `team-suit-${i}`;
+                suitSelect.setAttribute('aria-label', `Partner card ${i + 1} suit`);
                 suits.forEach(s => suitSelect.appendChild(new Option(s, s)));
 
                 selectorDiv.appendChild(rankSelect); selectorDiv.appendChild(suitSelect);
@@ -588,6 +630,7 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
     if (isHost) {
         gameState.phase = 'LOBBY';
 
+        // Spectators stay spectators: they show up un-ticked in the lobby and the host can tick them back in.
         gameState.excludedIds = (gameState.spectators || []).map(sp => sp.id);
 
         gameState.players.forEach(p => {

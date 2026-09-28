@@ -30,7 +30,9 @@ let gameState = {
     calledCards: [],
     originalCalledCards: [],
     spectators: [],
-    excludedIds: [],
+    excludedIds: [],      // Lobby only: ids the host has un-ticked (they'll spectate the next game)
+    lobbyOrder: [],       // Lobby only: host-chosen order of ids; becomes the seating / turn order
+    disconnectedIds: [],  // ids of people whose connection dropped or who closed the tab
     biddingDeadline: null,
     turnDeadline: null,
     isPaused: false,
@@ -42,19 +44,29 @@ let gameStats = {};
 const MIN_PLAYERS = 2;
 
 // ---------- Lobby seat selection (host picks who plays, the rest spectate) ----------
+
 function stripSpectatorTag(name) {
     return name.replace(' (Spectator)', '');
 }
 
+// Everyone currently in the lobby (players + spectators), in the host-chosen order.
 function getLobbyMembers() {
-    return [
+    const members = [
         ...gameState.players.map(p => ({ id: p.id, name: p.name })),
         ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name) }))
     ];
+    const order = gameState.lobbyOrder || [];
+    const rank = id => { const i = order.indexOf(id); return i === -1 ? order.length : i; };
+    return members.sort((a, b) => rank(a.id) - rank(b.id)); // stable: unknown ids keep join order at the end
+}
+
+function isDisconnected(id) {
+    return (gameState.disconnectedIds || []).includes(id);
 }
 
 function toggleSeat(targetId) {
     if (!isHost || gameState.phase !== 'LOBBY') return;
+    if (isDisconnected(targetId)) return;
     if (!gameState.excludedIds) gameState.excludedIds = [];
 
     const idx = gameState.excludedIds.indexOf(targetId);
@@ -63,9 +75,23 @@ function toggleSeat(targetId) {
     broadcastState();
 }
 
+// dir = -1 moves the person up, +1 moves them down. The final order is the turn order in game.
+function moveMember(targetId, dir) {
+    if (!isHost || gameState.phase !== 'LOBBY') return;
+    const order = getLobbyMembers().map(m => m.id);
+    const i = order.indexOf(targetId);
+    const j = i + dir;
+    if (i === -1 || j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    gameState.lobbyOrder = order;
+    broadcastState();
+}
+
+// Called right before startDeal(): ticked members become players (in lobby order), the rest spectators.
+// Disconnected people are dropped. Returns false (and changes nothing) if too few players are ticked.
 function applySeatSelection() {
     const excluded = new Set(gameState.excludedIds || []);
-    const members = getLobbyMembers();
+    const members = getLobbyMembers().filter(m => !isDisconnected(m.id));
     const seated = members.filter(m => !excluded.has(m.id));
     if (seated.length < MIN_PLAYERS) return false;
 
@@ -75,6 +101,8 @@ function applySeatSelection() {
     gameState.spectators = members
         .filter(m => excluded.has(m.id))
         .map(m => ({ id: m.id, name: m.name + ' (Spectator)' }));
+    gameState.lobbyOrder = members.map(m => m.id);
+    gameState.disconnectedIds = [];
     return true;
 }
 

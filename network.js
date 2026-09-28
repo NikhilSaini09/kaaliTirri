@@ -8,8 +8,12 @@ let hostConnection = null;
 function broadcastState() {
     if (!isHost) return;
     Object.values(connections).forEach(conn => {
-        const safeState = getSanitizedStateForClient(conn.peer);
-        conn.send({ type: 'STATE_UPDATE', state: safeState });
+        try {
+            const safeState = getSanitizedStateForClient(conn.peer);
+            conn.send({ type: 'STATE_UPDATE', state: safeState });
+        } catch (e) {
+            // Connection already dead; markDisconnected() will handle it via the close event / LEAVE message.
+        }
     });
     renderState(); 
 }
@@ -24,8 +28,34 @@ function kickPlayer(targetId) {
     gameState.players = gameState.players.filter(p => p.id !== targetId);
     gameState.spectators = (gameState.spectators || []).filter(s => s.id !== targetId);
     gameState.excludedIds = (gameState.excludedIds || []).filter(id => id !== targetId);
+    gameState.lobbyOrder = (gameState.lobbyOrder || []).filter(id => id !== targetId);
+    gameState.disconnectedIds = (gameState.disconnectedIds || []).filter(id => id !== targetId);
     broadcastState();
 }
+
+// Host side: a player closed the tab / lost connection. They stay listed (shown as disconnected in the lobby).
+function markDisconnected(peerId) {
+    if (!isHost) return;
+    delete connections[peerId];
+
+    const known = gameState.players.some(p => p.id === peerId) ||
+                  (gameState.spectators || []).some(s => s.id === peerId);
+    if (!known) return; // e.g. someone we just kicked
+
+    if (!gameState.disconnectedIds) gameState.disconnectedIds = [];
+    if (!gameState.disconnectedIds.includes(peerId)) gameState.disconnectedIds.push(peerId);
+    broadcastState();
+}
+
+// Client side: tell the host we're leaving. 'pagehide' fires when the tab is really closing
+// (unlike 'beforeunload', it can't be cancelled by the "leave site?" prompt).
+let leaveSent = false;
+function sendLeaveNotice() {
+    if (isHost || leaveSent || !hostConnection) return;
+    leaveSent = true;
+    try { hostConnection.send({ type: 'LEAVE' }); } catch (e) {}
+}
+window.addEventListener('pagehide', sendLeaveNotice);
 
 document.getElementById('hostBtn').addEventListener('click', () => {
     const nameInput = document.getElementById('playerName').value.trim();
@@ -71,8 +101,11 @@ document.getElementById('hostBtn').addEventListener('click', () => {
 
     peer.on('connection', (conn) => {
         connections[conn.peer] = conn;
-        
+
+        conn.on('close', () => markDisconnected(conn.peer));
+
         conn.on('data', (data) => {
+            if (data.type === 'LEAVE') { markDisconnected(conn.peer); return; }
             if (data.type === 'JOIN_LOBBY') {
                 if (gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
                     gameState.spectators.push({ id: conn.peer, name: data.name + " (Spectator)" });

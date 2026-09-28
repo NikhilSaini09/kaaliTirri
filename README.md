@@ -33,7 +33,7 @@ Deck: 52 cards, no jokers.
 * 5 of each of the suits = 5 pts
 * 10, J, Q, K, A of each of the suits = 10 pts
 
-Max possible points = 30 + (5*4) + (10*5 * 4) = 250 pts
+Max possible points = 30 \+ (5 \* 4) \+ (10 \* 5 \* 4) = 250 pts
 
 ### Rank of card
 

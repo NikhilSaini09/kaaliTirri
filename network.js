@@ -11,9 +11,7 @@ function broadcastState() {
         try {
             const safeState = getSanitizedStateForClient(conn.peer);
             conn.send({ type: 'STATE_UPDATE', state: safeState });
-        } catch (e) {
-            // Connection already dead; markDisconnected() will handle it via the close event / LEAVE message.
-        }
+        } catch (e) {}
     });
     renderState(); 
 }
@@ -21,7 +19,7 @@ function broadcastState() {
 function kickPlayer(targetId) {
     if (!isHost) return;
     if (connections[targetId]) {
-        connections[targetId].send({ type: 'KICKED' });
+        connections[targetId].send({ type: 'KICKED', message: 'You have been removed by the host.' });
         connections[targetId].close();
         delete connections[targetId];
     }
@@ -33,22 +31,19 @@ function kickPlayer(targetId) {
     broadcastState();
 }
 
-// Host side: a player closed the tab / lost connection. They stay listed (shown as disconnected in the lobby).
 function markDisconnected(peerId) {
     if (!isHost) return;
     delete connections[peerId];
 
     const known = gameState.players.some(p => p.id === peerId) ||
                   (gameState.spectators || []).some(s => s.id === peerId);
-    if (!known) return; // e.g. someone we just kicked
+    if (!known) return;
 
     if (!gameState.disconnectedIds) gameState.disconnectedIds = [];
     if (!gameState.disconnectedIds.includes(peerId)) gameState.disconnectedIds.push(peerId);
     broadcastState();
 }
 
-// Client side: tell the host we're leaving. 'pagehide' fires when the tab is really closing
-// (unlike 'beforeunload', it can't be cancelled by the "leave site?" prompt).
 let leaveSent = false;
 function sendLeaveNotice() {
     if (isHost || leaveSent || !hostConnection) return;
@@ -107,25 +102,78 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         conn.on('data', (data) => {
             if (data.type === 'LEAVE') { markDisconnected(conn.peer); return; }
             if (data.type === 'JOIN_LOBBY') {
-                const normName = data.name.trim();
+                const finalName = data.name.trim();
 
-                const dcIndex = (gameState.disconnectedIds || []).findIndex(dcId => {
-                    const pl = gameState.players.find(p => p.id === dcId);
-                    return pl && pl.name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '').trim() === normName;
-                });
+                if (typeof playerData !== 'undefined' && playerData && playerData.length > 0) {
+                    const entry = playerData.find(pd => pd.code === finalName);
+                    if (!entry || !entry.name || entry.name.trim() === "") {
+                        conn.send({ type: 'ERROR', message: 'Invalid access code.' });
+                        setTimeout(() => conn.close(), 500);
+                        return;
+                    }
+                    finalName = entry.name.trim();
 
-                if (dcIndex !== -1 && (gameState.phase !== 'LOBBY')) {
-                    const oldId = gameState.disconnectedIds.splice(dcIndex, 1)[0];
-                    const player = gameState.players.find(p => p.id === oldId);
-                    if (player) {
-                        player.id = conn.peer;
+                    const existingPlayer = gameState.players.find(p => p.name === finalName);
+                    const existingSpectator = (gameState.spectators || []).find(s => s.name.replace(' (Spectator)','') === finalName);
+
+                    if (existingPlayer) {
+                        if (connections[existingPlayer.id]) {
+                            connections[existingPlayer.id].send({ type: 'KICKED', message: 'Session overridden from another tab.' });
+                            connections[existingPlayer.id].close();
+                            delete connections[existingPlayer.id];
+                        }
+                        const oldId = existingPlayer.id;
+                        existingPlayer.id = conn.peer;
                         gameState.board.forEach(c => { if (c.playedBy === oldId) c.playedBy = conn.peer; });
                         if (gameState.highestBid.playerId === oldId) gameState.highestBid.playerId = conn.peer;
+                        gameState.disconnectedIds = (gameState.disconnectedIds || []).filter(id => id !== oldId);
+                        broadcastState();
+                        return;
                     }
-                } else if (gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
-                    gameState.spectators.push({ id: conn.peer, name: data.name + " (Spectator)" });
+                    if (existingSpectator) {
+                        if (connections[existingSpectator.id]) {
+                            connections[existingSpectator.id].send({ type: 'KICKED', message: 'Session overridden from another tab.' });
+                            connections[existingSpectator.id].close();
+                            delete connections[existingSpectator.id];
+                        }
+                        const oldId = existingSpectator.id;
+                        existingSpectator.id = conn.peer;
+                        gameState.disconnectedIds = (gameState.disconnectedIds || []).filter(id => id !== oldId);
+                        broadcastState();
+                        return;
+                    }
                 } else {
-                    gameState.players.push({ id: conn.peer, name: data.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
+                    const isDupPlayer = gameState.players.some(p => p.name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '') === finalName && !isDisconnected(p.id));
+                    const isDupSpec = (gameState.spectators||[]).some(s => s.name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '') === finalName && !isDisconnected(s.id));
+                    if (isDupPlayer || isDupSpec) {
+                        conn.send({ type: 'ERROR', message: 'Name already taken. Please choose another or wait for disconnect.' });
+                        setTimeout(() => conn.close(), 500);
+                        return;
+                    }
+
+                    const dcIndex = (gameState.disconnectedIds || []).findIndex(dcId => {
+                        const pl = gameState.players.find(p => p.id === dcId);
+                        return pl && pl.name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '').trim() === finalName;
+                    });
+
+                    if (dcIndex !== -1) {
+                        const oldId = gameState.disconnectedIds.splice(dcIndex, 1)[0];
+                        const player = gameState.players.find(p => p.id === oldId);
+                        if (player) {
+                            player.id = conn.peer;
+                            gameState.board.forEach(c => { if (c.playedBy === oldId) c.playedBy = conn.peer; });
+                            if (gameState.highestBid.playerId === oldId) gameState.highestBid.playerId = conn.peer;
+                            broadcastState();
+                            return;
+                        }
+                    }
+                }
+
+                if (gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
+                    gameState.spectators.push({ id: conn.peer, name: finalName + " (Spectator)" });
+                    conn.send({ type: 'STATE_UPDATE', state: gameState, isSpectator: true });
+                } else {
+                    gameState.players.push({ id: conn.peer, name: finalName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
                 }
                 broadcastState();
             }

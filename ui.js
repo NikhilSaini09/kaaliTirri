@@ -10,6 +10,24 @@ function switchView(viewId) {
     document.getElementById(viewId).style.display = 'flex';
 }
 
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playTone(freq, type, duration, vol) {
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+}
+function playCardSound() { playTone(250, 'triangle', 0.1, 0.4); } 
+function playTurnSound() { playTone(600, 'sine', 0.3, 0.2); setTimeout(() => playTone(800, 'sine', 0.4, 0.2), 100); } 
+function playTickSound() { playTone(800, 'square', 0.05, 0.05); } 
+
 const PHASE_LABELS = {
     LOBBY: 'Lobby',
     BIDDING: 'Bidding',
@@ -134,6 +152,7 @@ function renderLobby() {
 
 let timerBarInterval = null;
 let timerBarDeadline = null;
+let lastTickSec = -1;
 
 function startTimerBarLoop(deadline, totalMs, label) {
     const labelEl = document.getElementById('timer-bar-label');
@@ -154,6 +173,12 @@ function startTimerBarLoop(deadline, totalMs, label) {
         fill.style.width = `${pct}%`;
         text.textContent = `${remainingSec}s`;
         wrap.classList.toggle('urgent', remainingSec <= 10);
+        
+        if (remainingSec <= 5 && remainingSec > 0 && lastTickSec !== remainingSec) {
+            playTickSound();
+            lastTickSec = remainingSec;
+        }
+
         if (remainingMs <= 0) {
             clearInterval(timerBarInterval);
             timerBarInterval = null;
@@ -167,12 +192,15 @@ function stopTimerBarLoop() {
     if (timerBarInterval) clearInterval(timerBarInterval);
     timerBarInterval = null;
     timerBarDeadline = null;
+    lastTickSec = -1;
     document.getElementById('timer-bar-wrap').classList.remove('is-visible', 'urgent');
 }
 
 function cleanPlayerName(name) {
     return name.replace(' (Host)', ' (H)').replace(' (Spectator)', ' (S)');
 }
+
+let previousTurnPlayerId = null;
 
 function renderGameBoard() {
     const myArea = document.getElementById('my-area');
@@ -203,6 +231,11 @@ function renderGameBoard() {
     const activeTurnPlayer = (gameState.phase === 'PLAYING' && gameState.players.length > 0)
         ? gameState.players[gameState.turnIndex]
         : null;
+
+    if (activeTurnPlayer && activeTurnPlayer.id === myPeerId && previousTurnPlayerId !== myPeerId && !gameState.isPaused) {
+        playTurnSound();
+    }
+    previousTurnPlayerId = activeTurnPlayer ? activeTurnPlayer.id : null;
 
     if (gameState.phase === 'BIDDING' && gameState.biddingDeadline) {
         timerWrap.classList.add('is-visible');
@@ -378,6 +411,7 @@ function renderGameBoard() {
         const statusRow = document.createElement('div');
         statusRow.className = 'my-status-row';
         myArea.appendChild(statusRow);
+        
         if (isMyTurn) {
             const badge = document.createElement('div');
             badge.className = 'your-turn-badge';
@@ -418,8 +452,8 @@ function renderGameBoard() {
                 cardEl.style.width = `${cardW}px`;
                 cardEl.style.height = `${cardH}px`;
                 cardEl.style.fontSize = `${rankSize}px`;
-                const suitEl = cardEl.querySelector('.card-suit');
-                if (suitEl) suitEl.style.fontSize = `${suitSize}px`;
+                    const suitEl = cardEl.querySelector('.card-suit');
+                    if (suitEl) suitEl.style.fontSize = `${suitSize}px`;
             });
         }
 
@@ -436,7 +470,7 @@ function renderGameBoard() {
         }
 
         if (me.hasFolded && (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION')) {
-            foldBanner.textContent = "You folded — waiting for the rest of the table";
+        foldBanner.textContent = "You folded — waiting for the rest of the table";
             foldBanner.style.display = 'block';
         } else {
             foldBanner.style.display = 'none';
@@ -450,6 +484,7 @@ function renderGameBoard() {
             showOverlay = true;
             biddingPanel.style.display = 'flex';
 
+            setTimeout(() => document.getElementById('bidAmount').focus(), 100);
             const minBid = Math.max(MIN_BID, gameState.highestBid.amount + 5);
             const bidInput = document.getElementById('bidAmount');
             bidInput.min = minBid;
@@ -499,13 +534,25 @@ function renderGameBoard() {
         let dTeamHtml = ''; let dTotal = 0;
 
         gameState.players.forEach(p => {
+            const clean = cleanPlayerName(p.name);
+            const stats = gameStats[clean.replace(" (H)", "")] || { wins: 0, gamesPlayed: 0, winRate: '0.0%' };
+            const statLine = `<span style="font-size: 11px; opacity: 0.8; display: block;">Career: ${stats.wins}W / ${stats.gamesPlayed - stats.wins}L (${stats.winRate})</span>`;
+            
             if (p.team === 'BIDDER_TEAM') {
-                bTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
+                bTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${p.points} pts</b>${statLine}</div>`;
                 bTotal += p.points;
             } else {
-                dTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
+                dTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${p.points} pts</b>${statLine}</div>`;
                 dTotal += p.points;
             }
+
+            // if (p.team === 'BIDDER_TEAM') {
+            //     bTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
+            //     bTotal += p.points;
+            // } else {
+            //     dTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
+            //     dTotal += p.points;
+            // }
         });
 
         document.getElementById('bidder-stats').innerHTML = bTeamHtml;
@@ -536,19 +583,21 @@ function createCardElement(card, isClickable, isPlayable = true) {
 
 function requestPlayCard(card) {
     if (!isCardPlayable(myPeerId, card)) { alert("You cannot play this card."); return; }
+    playCardSound();
     if (isHost) { handlePlayCard(myPeerId, card); broadcastState(); }
     else if (hostConnection) hostConnection.send({ type: 'ACTION_PLAY_CARD', card: card });
 }
 
 function normalizeName(name) {
     if (!name) return "";
-    return name.replace(/\s*\((Host\vert{}H\vert{}Spectator\vert{}S)\)\s*/gi, '').trim();
+    return name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '').trim();
 }
 
 function saveGame() {
     const payload = {
         gameState: gameState,
-        gameStats: gameStats
+        gameStats: gameStats,
+        playerData: playerData
     };
 
     const dataStr = JSON.stringify(payload, null, 2);
@@ -575,6 +624,8 @@ function loadGame(event) {
             const parsed = JSON.parse(e.target.result);
 
             if (parsed.gameState) {
+                playerData = parsed.playerData || [];
+                
                 let allCurrentUsers = [];
                 gameState.players.forEach(p => allCurrentUsers.push({ id: p.id, name: p.name }));
                 (gameState.spectators || []).forEach(s => allCurrentUsers.push({ id: s.id, name: s.name }));
@@ -597,7 +648,7 @@ function loadGame(event) {
                     }
                 });
 
-                // PASS 2: Map unassigned seats to remaining people in room
+                // PASS 2: Map unassigned seats
                 parsed.gameState.players.forEach((savedPlayer, index) => {
                     if (!newPlayers[index]) {
                         if (currentPool.length > 0) {
@@ -645,6 +696,7 @@ function loadGame(event) {
                     parsed.gameState.turnIndex = 0; 
                 }
 
+                // Reset and Auto-Pause
                 parsed.gameState.isPaused = true;
                 parsed.gameState.pausedRemaining = 30000;
                 parsed.gameState.biddingDeadline = null;
@@ -703,7 +755,6 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
     if (isHost) {
         gameState.phase = 'LOBBY';
 
-        // Spectators stay spectators: they show up un-ticked in the lobby and the host can tick them back in.
         gameState.excludedIds = (gameState.spectators || []).map(sp => sp.id);
 
         gameState.players.forEach(p => {

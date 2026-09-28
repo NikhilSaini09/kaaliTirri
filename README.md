@@ -20,23 +20,20 @@ Kaali Tirri is a trick-taking game with dynamic team alliances and an open biddi
 
 ## Rules of the Game
 
-### Card info
+### Card Info
 
-Deck: 52 cards, no jokers;
+Deck: 52 cards, no jokers.
 
 ---
 
 ### Points for each card
 
-2, 4, 6, 7, 8, 9 of each of the 4 suits = 0 pts
+* 2, 4, 6, 7, 8, 9 of each of the 4 suits = 0 pts
+* 3 of Spades = 30 pts (3 of other suits = 0 pts)
+* 5 of each of the suits = 5 pts
+* 10, J, Q, K, A of each of the suits = 10 pts
 
-3 of Spades = 30pts; 3 of other suits = 0 pts
-
-5 of each of the suits = 5 pts
-
-10, J, Q, K, A of each of the suits = 10 pts
-
-Max possible = 30 + 5*4 + 10*5*4 = 250 pts
+Max possible points = 30 + (5*4) + (10*5 * 4) = 250 pts
 
 ### Rank of card
 
@@ -47,48 +44,42 @@ Max possible = 30 + 5*4 + 10*5*4 = 250 pts
 
 ### Distribution & Auction
 
-All the 52 cards are distributed randomly to each of the players. Cards are distributed equally extras are discarded.
-Now, after they observer their cards they start "# BIDDING", individually. Minimum 130 pts and max 250 pts can be bid.
-Whoever bids highest or 250 first is the "BID_WINNER".
-Anyone can bid, if no one bids in a given time-frame, then a random player is assigned as BID_WINNER with 130 pts.
-BIDDINGA_AMOUNT: the highest bid in the auction.
+All 52 cards are distributed randomly and evenly to the active players; any remainder is discarded. Hands are automatically sorted by suit and rank for convenience.
+
+After reviewing their cards, players begin the **Bidding Phase**. The minimum bid is 130 pts and the maximum is 250 pts.
+Whoever bids highest (or hits 250 first) is the "BID_WINNER". If the initial 30-second timer expires with no bids, a random player is forcefully assigned as the BID_WINNER with 130 pts.
 
 The BID_WINNER gets to choose two things:
 
-* TRUMP_SUITE
-* PARTNER_CARD (suite + cardnumber)
+1. TRUMP_SUIT (The Cart)
+2. PARTNER_CARD(S) (Suit + Card Number) - The number of partner cards scales with the player count.
 
-Player holding the PARTNER_CARD and the BID_WINNER are a team, and the remaining ones in other team. (2 teams)
-Partner is not revealed to any of the players till he plays that card, except the one as he owns the PARTNER_CARD.
+Players holding the PARTNER_CARD(S) and the BID_WINNER form the Bidder Team, while all remaining players form the Defender Team. Partner identities are kept completely secret from the table until they physically play the called card.
 
 ---
 
 ### Round of Cards
 
-Players (in clockwise order): p1 -> p2 -> p3 -> p4
+Players take turns in clockwise order. The first trick is led by the BID_WINNER, and all subsequent tricks are led by the previous trick's winner.
 
-Once the above settles, game starts with round of cards. In each round, all the players (in clockwise way) gets a chance to play a card from their own deck.
-Each played is visible to everyone the time its played. Say, p1 played "Ace of Spades", then other players get to know it immediately and decide their own card to play accordingly.
-First round is started by the BID_WINNER, and the subsequent rounds are started by the previous ROUND_WINNER
-For each round, the suit of the card that has to be played will be fixed and is decided by the player who begins the round. ::: -> Say p3 is the one starting the round and played "King of Hearts". Now other players can only play the cards of "Hearts" suit from their deck or any card from the "TRUMP_SUITE" for the particular round. If the players do not have cards from these suits, then only they can play the cards from other suits.
-Cards with highest rank wins the round. If card from any TRUMP_SUITE has been played, then the highest rank of the card from the TRUMP_SUITE wins the round.
-ROUND_WINNER gets the points calculated as above mentioned points.
-Score of each players is always visible to all players.
-All the cards played are then discarded and cannot be used in the next rounds.
-Whenever the "PARTNER_CARD" is played, the partner of the BID_WINNER is revealed.In the end of all the rounds, the score gets accumulated team-wise. PARTNER_CARD holder + BID_WINNER is Bidder TEAM, and other players in Defender TEAM.
-If Bidder TEAM score is greater than or equals to the BIDDING_AMOUNT, they wins else the Defender TEAM wins.
-Each player gets 30 sec to play their card, else the system automatically plays
+For each trick, the suit of the led card must be followed. If a player does not have a card of the led suit, they may play a card from the TRUMP_SUIT or any other suit. The highest rank of the led suit wins the trick, unless a TRUMP_SUIT card is played, in which case the highest trump wins.
+
+The score of the trick is added to the winner's total, and the cards are moved to their "Won Pile" (which can be inspected by clicking on it).
+
+At the end of all tricks, team scores are aggregated. If the Bidder Team's score is strictly greater than or equal to the BIDDING_AMOUNT, they win. Otherwise, the Defender Team wins.
+
+Players have 30 seconds to play a card. If the timer expires, the engine automatically plays a valid card for them.
 
 ## Features
 
 * **Peer-to-Peer Networking:** Hosted locally by the room creator using WebRTC (PeerJS).
-* **Firewall Bypass:** Utilizes Google STUN and OpenRelay TURN servers to ensure connections succeed across strict mobile hotspots and corporate networks.
+* **Firewall Bypass:** Utilizes Google STUN and OpenRelay TURN servers to ensure connections succeed across strict NATs and corporate networks.
 * **Anti-Cheat Architecture:** The game state is sanitized before broadcasting. Opponents' hands are hidden at the memory level to prevent cheating via the browser console.
-* **Host-Controlled Seating:** In the waiting room the host sees a tick box next to every name (everyone starts ticked). Un-tick anyone, including the host, and they join the next game as a spectator; the ticked players are dealt in. Spectators stay spectators when the room returns to the lobby (shown un-ticked), so the host can tick them back in for the next game.
-* **Turn Order Control:** The host can nudge anyone up or down with the arrow buttons in the waiting room. That order becomes the seating and turn order for the next game.
-* **Disconnect Detection:** A player who closes their tab sends a final "leave" message to the host (with the connection-close event as a fallback). They stay listed in the waiting room, tagged `DISCONNECTED`, are never dealt in, and are dropped when the next game starts (the host can also kick them).
-* **Local State Management:** Games can be paused, downloaded as a JSON save file, and reloaded to resume a session later.
-* **Persistent Statistics:** Tracks wins, losses, and total games played across sessions using the save file ledger.
+* **Host-Controlled Seating & Order:** In the waiting room, the host can tick/untick players to assign them to active play or spectator status. The host can also manually reorder the turn cycle using arrow controls.
+* **Code-Based Join & Seamless Reconnection:** Supports a `playerData` array to map secret codes to names. If a player gets disconnected or closes their tab, they can re-enter their code in a new window to seamlessly override their dead connection and jump right back into their seat mid-hand. Disconnected players are skipped instantly during trick evaluation to prevent game stalls.
+* **Dynamic Save/Load State:** Games can be paused, saved as a JSON file, and restored later. The loading engine dynamically remaps live network IDs to the saved player data, preserving exact turn orders and shunting overflow players into the spectator pool.
+* **Quality of Life (Audio & UI):** Features native Web Audio API sound cues for card plays, turn notifications, and 5-second countdown warnings.
+* **Persistent Statistics:** Tracks career wins, losses, total games played, and win rates across sessions using the save file ledger.
 
 ## Architecture
 

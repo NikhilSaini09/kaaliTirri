@@ -1,4 +1,4 @@
-const suits = ['♠', '♥', '♦', '♣'];
+const suits = ['♠', '♥', '♣', '♦'];
 const values = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
 function getCardPoints(card) {
@@ -37,9 +37,9 @@ let gameState = {
     calledCards: [],
     originalCalledCards: [],
     spectators: [],
-    excludedIds: [],      // Lobby only: ids the host has un-ticked (they'll spectate the next game)
-    lobbyOrder: [],       // Lobby only: host-chosen order of ids; becomes the seating / turn order
-    disconnectedIds: [],  // ids of people whose connection dropped or who closed the tab
+    excludedIds: [],
+    lobbyOrder: [],
+    disconnectedIds: [],
     biddingDeadline: null,
     turnDeadline: null,
     isPaused: false,
@@ -51,12 +51,10 @@ let playerData = [];
 
 const MIN_PLAYERS = 2;
 
-// ---------- Lobby seat selection (host picks who plays, the rest spectate) ----------
 function stripSpectatorTag(name) {
     return name.replace(' (Spectator)', '');
 }
 
-// Everyone currently in the lobby (players + spectators), in the host-chosen order.
 function getLobbyMembers() {
     const members = [
         ...gameState.players.map(p => ({ id: p.id, name: p.name })),
@@ -64,7 +62,7 @@ function getLobbyMembers() {
     ];
     const order = gameState.lobbyOrder || [];
     const rank = id => { const i = order.indexOf(id); return i === -1 ? order.length : i; };
-    return members.sort((a, b) => rank(a.id) - rank(b.id)); // stable: unknown ids keep join order at the end
+    return members.sort((a, b) => rank(a.id) - rank(b.id));
 }
 
 function isDisconnected(id) {
@@ -82,7 +80,6 @@ function toggleSeat(targetId) {
     broadcastState();
 }
 
-// dir = -1 moves the person up, +1 moves them down. The final order is the turn order in game.
 function moveMember(targetId, dir) {
     if (!isHost || gameState.phase !== 'LOBBY') return;
     const order = getLobbyMembers().map(m => m.id);
@@ -94,8 +91,6 @@ function moveMember(targetId, dir) {
     broadcastState();
 }
 
-// Called right before startDeal(): ticked members become players (in lobby order), the rest spectators.
-// Disconnected people are dropped. Returns false (and changes nothing) if too few players are ticked.
 function applySeatSelection() {
     const excluded = new Set(gameState.excludedIds || []);
     const members = getLobbyMembers().filter(m => !isDisconnected(m.id));
@@ -241,7 +236,7 @@ function evaluateRoundEnd() {
 
     gameState.players.forEach(p => {
         if(p.name.includes("(Spectator)")) return;
-        const cleanName = p.name.replace(" (Host)", "").trim();
+        const cleanName = p.name.replace(" (Host)", "").replace(" (H)", "").trim();
         
         if (!gameStats[cleanName]) {
             gameStats[cleanName] = { gamesPlayed: 0, wins: 0, losses: 0 };
@@ -255,6 +250,8 @@ function evaluateRoundEnd() {
         } else {
             gameStats[cleanName].losses += 1;
         }
+
+        gameStats[cleanName].winRate = ((gameStats[cleanName].wins / gameStats[cleanName].gamesPlayed) * 100).toFixed(2) + '%';
     });
 }
 
@@ -402,20 +399,23 @@ function checkTurnTimeout() {
     if (!isHost) return;
     if (gameState.isPaused) return;
     if (gameState.phase !== 'PLAYING' || !gameState.turnDeadline) return;
-    if (Date.now() < gameState.turnDeadline) return;
 
     const player = gameState.players[gameState.turnIndex];
     if (!player) { gameState.turnDeadline = null; return; }
 
-    const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
-    const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
+    const isPlayerDisconnected = (gameState.disconnectedIds || []).includes(player.id);
 
-    if (cardToPlay) {
-        handlePlayCard(player.id, cardToPlay);
-    } else {
-        gameState.turnDeadline = null;
+    if (isPlayerDisconnected || Date.now() >= gameState.turnDeadline) {
+        const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
+        const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
+
+        if (cardToPlay) {
+            handlePlayCard(player.id, cardToPlay);
+        } else {
+            gameState.turnDeadline = null;
+        }
+        broadcastState();
     }
-    broadcastState();
 }
 
 setInterval(checkTurnTimeout, 1000);

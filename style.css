@@ -797,7 +797,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
-    min-height: 36px; /* reserved so the table doesn't jump when the badge/pile appear */
+    min-height: 36px;
     margin-bottom: 10px;
 }
 .my-status-row .your-turn-badge,

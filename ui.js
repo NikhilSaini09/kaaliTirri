@@ -246,7 +246,7 @@ function renderGameBoard() {
         }
 
         const fanHtml = isMobile ? '' :
-            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length / 4 + 1, 4))}</div>`;
+            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length / 2 + 1, 5))}</div>`;
 
         oppDiv.innerHTML = `
             <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${cleanName}</span>

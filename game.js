@@ -30,6 +30,7 @@ let gameState = {
     calledCards: [],
     originalCalledCards: [],
     spectators: [],
+    excludedIds: [],
     biddingDeadline: null,
     turnDeadline: null,
     isPaused: false,
@@ -37,6 +38,45 @@ let gameState = {
 };
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
 let gameStats = {}; 
+
+const MIN_PLAYERS = 2;
+
+// ---------- Lobby seat selection (host picks who plays, the rest spectate) ----------
+function stripSpectatorTag(name) {
+    return name.replace(' (Spectator)', '');
+}
+
+function getLobbyMembers() {
+    return [
+        ...gameState.players.map(p => ({ id: p.id, name: p.name })),
+        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name) }))
+    ];
+}
+
+function toggleSeat(targetId) {
+    if (!isHost || gameState.phase !== 'LOBBY') return;
+    if (!gameState.excludedIds) gameState.excludedIds = [];
+
+    const idx = gameState.excludedIds.indexOf(targetId);
+    if (idx === -1) gameState.excludedIds.push(targetId);
+    else gameState.excludedIds.splice(idx, 1);
+    broadcastState();
+}
+
+function applySeatSelection() {
+    const excluded = new Set(gameState.excludedIds || []);
+    const members = getLobbyMembers();
+    const seated = members.filter(m => !excluded.has(m.id));
+    if (seated.length < MIN_PLAYERS) return false;
+
+    gameState.players = seated.map(m => ({
+        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN'
+    }));
+    gameState.spectators = members
+        .filter(m => excluded.has(m.id))
+        .map(m => ({ id: m.id, name: m.name + ' (Spectator)' }));
+    return true;
+}
 
 function generateDeck() {
     let deck = [];
@@ -377,7 +417,9 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
 
     gameState.trumpSuit = suit;
-    gameState.calledCards = [...calledCardsArray]; 
+
+    const allowedCards = Math.floor((gameState.players.length - 2) / 2);
+    gameState.calledCards = [...calledCardsArray].slice(0, allowedCards);
     gameState.originalCalledCards = [...calledCardsArray];
     
     const bidderIndex = gameState.players.findIndex(p => p.id === playerId);

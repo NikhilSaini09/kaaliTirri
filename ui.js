@@ -33,22 +33,66 @@ function renderLobby() {
     const lobbyDiv = document.getElementById('lobby-players');
     lobbyDiv.innerHTML = '';
 
-    gameState.players.forEach(player => {
-        const pDiv = document.createElement('div');
-        pDiv.className = 'lobby-player-row';
+    const excluded = new Set(gameState.excludedIds || []);
+    const members = getLobbyMembers();
 
-        const displayName = cleanPlayerName(player.name);
-        let html = `<span>${displayName}${player.id === myPeerId ? '<span class="you-tag">YOU</span>' : ''}</span>`;
-        if (isHost && player.id !== myPeerId) {
-            html += `<button class="btn-danger" onclick="kickPlayer('${player.id}')" style="padding: 5px 12px; font-size: 13px;">Kick</button>`;
+    members.forEach(member => {
+        const isOut = excluded.has(member.id);
+
+        const row = document.createElement('div');
+        row.className = 'lobby-player-row' + (isOut ? ' is-sitting-out' : '');
+
+        const main = document.createElement('div');
+        main.className = 'lobby-player-main';
+
+        if (isHost) {
+            const check = document.createElement('input');
+            check.type = 'checkbox';
+            check.className = 'seat-check';
+            check.checked = !isOut;
+            check.title = isOut ? 'Click to let them play' : 'Click to make them a spectator';
+            check.addEventListener('change', () => toggleSeat(member.id));
+            main.appendChild(check);
         }
 
-        pDiv.innerHTML = html;
-        lobbyDiv.appendChild(pDiv);
+        const nameEl = document.createElement('span');
+        nameEl.textContent = cleanPlayerName(member.name);
+        main.appendChild(nameEl);
+
+        if (member.id === myPeerId) {
+            const you = document.createElement('span');
+            you.className = 'you-tag';
+            you.textContent = 'YOU';
+            main.appendChild(you);
+        }
+        if (isOut) {
+            const tag = document.createElement('span');
+            tag.className = 'spectating-tag';
+            tag.textContent = 'SPECTATING';
+            main.appendChild(tag);
+        }
+        row.appendChild(main);
+
+        if (isHost && member.id !== myPeerId) {
+            const kick = document.createElement('button');
+            kick.className = 'btn-danger';
+            kick.style.cssText = 'padding: 5px 12px; font-size: 13px;';
+            kick.textContent = 'Kick';
+            kick.addEventListener('click', () => kickPlayer(member.id));
+            row.appendChild(kick);
+        }
+
+        lobbyDiv.appendChild(row);
     });
 
+    const outCount = members.filter(m => excluded.has(m.id)).length;
+    const seatedCount = members.length - outCount;
+
+    const summary = document.getElementById('lobby-summary');
+    summary.textContent = `${seatedCount} playing` + (outCount ? ` \u00b7 ${outCount} spectating` : '');
+
     if (isHost) {
-        document.getElementById('startGameBtn').style.display = gameState.players.length >= 2 ? 'block' : 'none';
+        document.getElementById('startGameBtn').style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
     }
 }
 
@@ -531,28 +575,20 @@ function openWonCardsModal(player) {
 
 // UI Bindings
 document.getElementById('startGameBtn').addEventListener('click', () => {
-    if (isHost) { startDeal(); broadcastState(); }
+    if (!isHost) return;
+    if (!applySeatSelection()) {
+        alert(`Tick at least ${MIN_PLAYERS} players to start.`);
+        return;
+    }
+    startDeal();
+    broadcastState();
 });
 
 document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
     if (isHost) {
         gameState.phase = 'LOBBY';
 
-        if (gameState.spectators && gameState.spectators.length > 0) {
-            gameState.spectators.forEach(s => {
-                const cleanName = s.name.replace(" (Spectator)", "");
-                gameState.players.push({ 
-                    id: s.id, 
-                    name: cleanName, 
-                    hand: [], 
-                    wonCards: [], 
-                    points: 0, 
-                    currentBid: 0, 
-                    team: 'UNKNOWN' 
-                });
-            });
-            gameState.spectators = [];
-        }
+        gameState.excludedIds = (gameState.spectators || []).map(sp => sp.id);
 
         gameState.players.forEach(p => {
             p.hand = [];

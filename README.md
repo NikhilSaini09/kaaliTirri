@@ -13,6 +13,7 @@ Kaali Tirri is a trick-taking game with dynamic team alliances and an open biddi
   * Aces, Kings, Queens, Jacks, and 10s: 10 Points
   * 5s: 5 Points
   * 3 of Spades (Kaali Tirri): 30 Points
+* **Players:** Any number of people can be in the room, but only the ticked ones (minimum 2, designed for 7-8 max) are dealt in. Everyone else watches as a spectator.
 * **Bidding:** Players iteratively raise the bid (minimum 130, maximum 250 in multiples of 5) or fold. The highest bidder dictates the game terms.
 * **Trump & Teams:** The highest bidder selects the "Cart" (Trump suit) and calls out "Team Cards" based on the number of players. The players holding these called cards become the secret teammates of the bidder.
 * **The Reveal:** Alliances remain secret until a player physically plays a called team card, exposing them as either a Bidder or Defender.
@@ -22,6 +23,7 @@ Kaali Tirri is a trick-taking game with dynamic team alliances and an open biddi
 * **Peer-to-Peer Networking:** Hosted locally by the room creator using WebRTC (PeerJS).
 * **Firewall Bypass:** Utilizes Google STUN and OpenRelay TURN servers to ensure connections succeed across strict mobile hotspots and corporate networks.
 * **Anti-Cheat Architecture:** The game state is sanitized before broadcasting. Opponents' hands are hidden at the memory level to prevent cheating via the browser console.
+* **Host-Controlled Seating:** In the waiting room the host sees a tick box next to every name (everyone starts ticked). Un-tick anyone, including the host, and they join the next game as a spectator; the ticked players are dealt in. Spectators stay spectators when the room returns to the lobby (shown un-ticked), so the host can tick them back in for the next game.
 * **Local State Management:** Games can be paused, downloaded as a JSON save file, and reloaded to resume a session later.
 * **Persistent Statistics:** Tracks wins, losses, and total games played across sessions using the save file ledger.
 

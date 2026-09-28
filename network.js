@@ -22,6 +22,8 @@ function kickPlayer(targetId) {
         delete connections[targetId];
     }
     gameState.players = gameState.players.filter(p => p.id !== targetId);
+    gameState.spectators = (gameState.spectators || []).filter(s => s.id !== targetId);
+    gameState.excludedIds = (gameState.excludedIds || []).filter(id => id !== targetId);
     broadcastState();
 }
 
@@ -74,7 +76,6 @@ document.getElementById('hostBtn').addEventListener('click', () => {
             if (data.type === 'JOIN_LOBBY') {
                 if (gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
                     gameState.spectators.push({ id: conn.peer, name: data.name + " (Spectator)" });
-                    conn.send({ type: 'STATE_UPDATE', state: gameState, isSpectator: true });
                 } else {
                     gameState.players.push({ id: conn.peer, name: data.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
                 }

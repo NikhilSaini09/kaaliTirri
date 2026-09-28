@@ -1,4 +1,4 @@
-const suits = ['♠', '♥', '♦', '♣'];
+const suits = ['♠', '♥', '♣', '♦'];
 const values = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
 function getCardPoints(card) {
@@ -11,6 +11,13 @@ function getCardPoints(card) {
 
 function getCardRank(card) {
     return values.indexOf(card.value);
+}
+
+function sortHand(hand) {
+    hand.sort((a, b) => {
+        if (a.suit !== b.suit) return suits.indexOf(a.suit) - suits.indexOf(b.suit);
+        return getCardRank(a) - getCardRank(b);
+    });
 }
 
 const MIN_BID = 130;
@@ -30,13 +37,76 @@ let gameState = {
     calledCards: [],
     originalCalledCards: [],
     spectators: [],
+    excludedIds: [],
+    lobbyOrder: [],
+    disconnectedIds: [],
     biddingDeadline: null,
     turnDeadline: null,
     isPaused: false,
     pausedRemaining: null
 };
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
-let gameStats = {}; 
+let gameStats = {};
+let playerData = [];
+
+const MIN_PLAYERS = 2;
+
+function stripSpectatorTag(name) {
+    return name.replace(' (Spectator)', '');
+}
+
+function getLobbyMembers() {
+    const members = [
+        ...gameState.players.map(p => ({ id: p.id, name: p.name })),
+        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name) }))
+    ];
+    const order = gameState.lobbyOrder || [];
+    const rank = id => { const i = order.indexOf(id); return i === -1 ? order.length : i; };
+    return members.sort((a, b) => rank(a.id) - rank(b.id));
+}
+
+function isDisconnected(id) {
+    return (gameState.disconnectedIds || []).includes(id);
+}
+
+function toggleSeat(targetId) {
+    if (!isHost || gameState.phase !== 'LOBBY') return;
+    if (isDisconnected(targetId)) return;
+    if (!gameState.excludedIds) gameState.excludedIds = [];
+
+    const idx = gameState.excludedIds.indexOf(targetId);
+    if (idx === -1) gameState.excludedIds.push(targetId);
+    else gameState.excludedIds.splice(idx, 1);
+    broadcastState();
+}
+
+function moveMember(targetId, dir) {
+    if (!isHost || gameState.phase !== 'LOBBY') return;
+    const order = getLobbyMembers().map(m => m.id);
+    const i = order.indexOf(targetId);
+    const j = i + dir;
+    if (i === -1 || j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    gameState.lobbyOrder = order;
+    broadcastState();
+}
+
+function applySeatSelection() {
+    const excluded = new Set(gameState.excludedIds || []);
+    const members = getLobbyMembers().filter(m => !isDisconnected(m.id));
+    const seated = members.filter(m => !excluded.has(m.id));
+    if (seated.length < MIN_PLAYERS) return false;
+
+    gameState.players = seated.map(m => ({
+        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN'
+    }));
+    gameState.spectators = members
+        .filter(m => excluded.has(m.id))
+        .map(m => ({ id: m.id, name: m.name + ' (Spectator)' }));
+    gameState.lobbyOrder = members.map(m => m.id);
+    gameState.disconnectedIds = [];
+    return true;
+}
 
 function generateDeck() {
     let deck = [];
@@ -166,7 +236,7 @@ function evaluateRoundEnd() {
 
     gameState.players.forEach(p => {
         if(p.name.includes("(Spectator)")) return;
-        const cleanName = p.name.replace(" (Host)", "").trim();
+        const cleanName = p.name.replace(" (Host)", "").replace(" (H)", "").trim();
         
         if (!gameStats[cleanName]) {
             gameStats[cleanName] = { gamesPlayed: 0, wins: 0, losses: 0 };
@@ -180,9 +250,13 @@ function evaluateRoundEnd() {
         } else {
             gameStats[cleanName].losses += 1;
         }
+
+        gameStats[cleanName].winRate = ((gameStats[cleanName].wins / gameStats[cleanName].gamesPlayed) * 100).toFixed(2) + '%';
     });
 }
 
+const evictionValues = ['2', '3', '4', '6', '7', '8', '9'];
+const evictionSuits = ['♦', '♣', '♥', '♠'];
 function startDeal() {
     let fullDeck = generateDeck();
     shuffle(fullDeck);
@@ -195,8 +269,6 @@ function startDeal() {
     const totalCardsToDeal = cardsPerPlayer * numPlayers;
     const cardsToRemoveCount = 52 - totalCardsToDeal;
 
-    const evictionValues = ['2', '3', '4', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-    const evictionSuits = ['♦', '♣', '♥', '♠'];
     let evictionList = [];
     
     for (let v of evictionValues) {
@@ -238,6 +310,7 @@ function startDeal() {
         currentPlayer = (currentPlayer + 1) % numPlayers;
     }
 
+    gameState.players.forEach(p => sortHand(p.hand));
     gameState.phase = 'BIDDING';
 }
 
@@ -326,20 +399,23 @@ function checkTurnTimeout() {
     if (!isHost) return;
     if (gameState.isPaused) return;
     if (gameState.phase !== 'PLAYING' || !gameState.turnDeadline) return;
-    if (Date.now() < gameState.turnDeadline) return;
 
     const player = gameState.players[gameState.turnIndex];
     if (!player) { gameState.turnDeadline = null; return; }
 
-    const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
-    const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
+    const isPlayerDisconnected = (gameState.disconnectedIds || []).includes(player.id);
 
-    if (cardToPlay) {
-        handlePlayCard(player.id, cardToPlay);
-    } else {
-        gameState.turnDeadline = null;
+    if (isPlayerDisconnected || Date.now() >= gameState.turnDeadline) {
+        const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
+        const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
+
+        if (cardToPlay) {
+            handlePlayCard(player.id, cardToPlay);
+        } else {
+            gameState.turnDeadline = null;
+        }
+        broadcastState();
     }
-    broadcastState();
 }
 
 setInterval(checkTurnTimeout, 1000);
@@ -377,12 +453,20 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
 
     gameState.trumpSuit = suit;
-    gameState.calledCards = [...calledCardsArray]; 
+
+    const allowedCards = Math.floor((gameState.players.length - 2) / 2);
+    gameState.calledCards = [...calledCardsArray].slice(0, allowedCards);
     gameState.originalCalledCards = [...calledCardsArray];
     
     const bidderIndex = gameState.players.findIndex(p => p.id === playerId);
     gameState.players[bidderIndex].team = 'BIDDER_TEAM';
     gameState.turnIndex = bidderIndex;
+
+    if (allowedCards === 0) {
+        gameState.players.forEach(p => {
+            if (p.id !== playerId) p.team = 'DEFENDER_TEAM';
+        });
+    }
     
     gameState.phase = 'PLAYING';
     resetTurnTimer();

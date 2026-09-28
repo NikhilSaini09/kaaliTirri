@@ -10,6 +10,24 @@ function switchView(viewId) {
     document.getElementById(viewId).style.display = 'flex';
 }
 
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playTone(freq, type, duration, vol) {
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+}
+function playCardSound() { playTone(250, 'triangle', 0.1, 0.4); } 
+function playTurnSound() { playTone(600, 'sine', 0.3, 0.2); setTimeout(() => playTone(800, 'sine', 0.4, 0.2), 100); } 
+function playTickSound() { playTone(800, 'square', 0.05, 0.05); } 
+
 const PHASE_LABELS = {
     LOBBY: 'Lobby',
     BIDDING: 'Bidding',
@@ -33,27 +51,108 @@ function renderLobby() {
     const lobbyDiv = document.getElementById('lobby-players');
     lobbyDiv.innerHTML = '';
 
-    gameState.players.forEach(player => {
-        const pDiv = document.createElement('div');
-        pDiv.className = 'lobby-player-row';
+    const excluded = new Set(gameState.excludedIds || []);
+    const members = getLobbyMembers();
 
-        const displayName = cleanPlayerName(player.name);
-        let html = `<span>${displayName}${player.id === myPeerId ? '<span class="you-tag">YOU</span>' : ''}</span>`;
-        if (isHost && player.id !== myPeerId) {
-            html += `<button class="btn-danger" onclick="kickPlayer('${player.id}')" style="padding: 5px 12px; font-size: 13px;">Kick</button>`;
+    members.forEach((member, index) => {
+        const isGone = isDisconnected(member.id);
+        const isOut = isGone || excluded.has(member.id);
+
+        const row = document.createElement('div');
+        row.className = 'lobby-player-row' + (isOut ? ' is-sitting-out' : '');
+
+        const main = document.createElement('div');
+        main.className = 'lobby-player-main';
+
+        if (isHost) {
+            const check = document.createElement('input');
+            check.type = 'checkbox';
+            check.id = `seat-${member.id}`;
+            check.name = `seat-${member.id}`;
+            check.className = 'seat-check';
+            check.checked = !isOut;
+            check.disabled = isGone;
+            check.setAttribute('aria-label', `${cleanPlayerName(member.name)} plays next game`);
+            check.title = isGone ? 'Disconnected' : (isOut ? 'Click to let them play' : 'Click to make them a spectator');
+            check.addEventListener('change', () => toggleSeat(member.id));
+            main.appendChild(check);
         }
 
-        pDiv.innerHTML = html;
-        lobbyDiv.appendChild(pDiv);
+        const nameEl = document.createElement('span');
+        nameEl.textContent = cleanPlayerName(member.name);
+        main.appendChild(nameEl);
+
+        if (member.id === myPeerId) {
+            const you = document.createElement('span');
+            you.className = 'you-tag';
+            you.textContent = 'YOU';
+            main.appendChild(you);
+        }
+        if (isGone) {
+            const tag = document.createElement('span');
+            tag.className = 'disconnected-tag';
+            tag.textContent = 'DISCONNECTED';
+            main.appendChild(tag);
+        } else if (isOut) {
+            const tag = document.createElement('span');
+            tag.className = 'spectating-tag';
+            tag.textContent = 'SPECTATING';
+            main.appendChild(tag);
+        }
+        row.appendChild(main);
+
+        if (isHost) {
+            const controls = document.createElement('div');
+            controls.className = 'lobby-row-controls';
+
+            const up = document.createElement('button');
+            up.className = 'btn-wood move-btn';
+            up.textContent = '\u25B2';
+            up.setAttribute('aria-label', 'Move up');
+            up.disabled = index === 0;
+            up.addEventListener('click', () => moveMember(member.id, -1));
+
+            const down = document.createElement('button');
+            down.className = 'btn-wood move-btn';
+            down.textContent = '\u25BC';
+            down.setAttribute('aria-label', 'Move down');
+            down.disabled = index === members.length - 1;
+            down.addEventListener('click', () => moveMember(member.id, 1));
+
+            controls.appendChild(up);
+            controls.appendChild(down);
+
+            if (member.id !== myPeerId) {
+                const kick = document.createElement('button');
+                kick.className = 'btn-danger';
+                kick.style.cssText = 'padding: 5px 12px; font-size: 13px;';
+                kick.textContent = 'Kick';
+                kick.addEventListener('click', () => kickPlayer(member.id));
+                controls.appendChild(kick);
+            }
+            row.appendChild(controls);
+        }
+
+        lobbyDiv.appendChild(row);
     });
 
+    const goneCount = members.filter(m => isDisconnected(m.id)).length;
+    const outCount = members.filter(m => !isDisconnected(m.id) && excluded.has(m.id)).length;
+    const seatedCount = members.length - goneCount - outCount;
+
+    const summary = document.getElementById('lobby-summary');
+    summary.textContent = `${seatedCount} playing`
+        + (outCount ? ` \u00b7 ${outCount} spectating` : '')
+        + (goneCount ? ` \u00b7 ${goneCount} disconnected` : '');
+
     if (isHost) {
-        document.getElementById('startGameBtn').style.display = gameState.players.length >= 2 ? 'block' : 'none';
+        document.getElementById('startGameBtn').style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
     }
 }
 
 let timerBarInterval = null;
 let timerBarDeadline = null;
+let lastTickSec = -1;
 
 function startTimerBarLoop(deadline, totalMs, label) {
     const labelEl = document.getElementById('timer-bar-label');
@@ -74,6 +173,12 @@ function startTimerBarLoop(deadline, totalMs, label) {
         fill.style.width = `${pct}%`;
         text.textContent = `${remainingSec}s`;
         wrap.classList.toggle('urgent', remainingSec <= 10);
+        
+        if (remainingSec <= 5 && remainingSec > 0 && lastTickSec !== remainingSec) {
+            playTickSound();
+            lastTickSec = remainingSec;
+        }
+
         if (remainingMs <= 0) {
             clearInterval(timerBarInterval);
             timerBarInterval = null;
@@ -87,12 +192,15 @@ function stopTimerBarLoop() {
     if (timerBarInterval) clearInterval(timerBarInterval);
     timerBarInterval = null;
     timerBarDeadline = null;
+    lastTickSec = -1;
     document.getElementById('timer-bar-wrap').classList.remove('is-visible', 'urgent');
 }
 
 function cleanPlayerName(name) {
     return name.replace(' (Host)', ' (H)').replace(' (Spectator)', ' (S)');
 }
+
+let previousTurnPlayerId = null;
 
 function renderGameBoard() {
     const myArea = document.getElementById('my-area');
@@ -123,6 +231,11 @@ function renderGameBoard() {
     const activeTurnPlayer = (gameState.phase === 'PLAYING' && gameState.players.length > 0)
         ? gameState.players[gameState.turnIndex]
         : null;
+
+    if (activeTurnPlayer && activeTurnPlayer.id === myPeerId && previousTurnPlayerId !== myPeerId && !gameState.isPaused) {
+        playTurnSound();
+    }
+    previousTurnPlayerId = activeTurnPlayer ? activeTurnPlayer.id : null;
 
     if (gameState.phase === 'BIDDING' && gameState.biddingDeadline) {
         timerWrap.classList.add('is-visible');
@@ -246,7 +359,7 @@ function renderGameBoard() {
         }
 
         const fanHtml = isMobile ? '' :
-            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length / 4 + 1, 4))}</div>`;
+            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length / 2 + 1, 5))}</div>`;
 
         oppDiv.innerHTML = `
             <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${cleanName}</span>
@@ -298,6 +411,7 @@ function renderGameBoard() {
         const statusRow = document.createElement('div');
         statusRow.className = 'my-status-row';
         myArea.appendChild(statusRow);
+        
         if (isMyTurn) {
             const badge = document.createElement('div');
             badge.className = 'your-turn-badge';
@@ -338,8 +452,8 @@ function renderGameBoard() {
                 cardEl.style.width = `${cardW}px`;
                 cardEl.style.height = `${cardH}px`;
                 cardEl.style.fontSize = `${rankSize}px`;
-                const suitEl = cardEl.querySelector('.card-suit');
-                if (suitEl) suitEl.style.fontSize = `${suitSize}px`;
+                    const suitEl = cardEl.querySelector('.card-suit');
+                    if (suitEl) suitEl.style.fontSize = `${suitSize}px`;
             });
         }
 
@@ -356,7 +470,7 @@ function renderGameBoard() {
         }
 
         if (me.hasFolded && (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION')) {
-            foldBanner.textContent = "You folded — waiting for the rest of the table";
+        foldBanner.textContent = "You folded — waiting for the rest of the table";
             foldBanner.style.display = 'block';
         } else {
             foldBanner.style.display = 'none';
@@ -370,6 +484,7 @@ function renderGameBoard() {
             showOverlay = true;
             biddingPanel.style.display = 'flex';
 
+            setTimeout(() => document.getElementById('bidAmount').focus(), 100);
             const minBid = Math.max(MIN_BID, gameState.highestBid.amount + 5);
             const bidInput = document.getElementById('bidAmount');
             bidInput.min = minBid;
@@ -389,10 +504,16 @@ function renderGameBoard() {
 
                 const rankSelect = document.createElement('select');
                 rankSelect.className = 'team-rank-select';
+                rankSelect.id = `team-rank-${i}`;
+                rankSelect.name = `team-rank-${i}`;
+                rankSelect.setAttribute('aria-label', `Partner card ${i + 1} rank`);
                 values.forEach(v => rankSelect.appendChild(new Option(v, v)));
 
                 const suitSelect = document.createElement('select');
                 suitSelect.className = 'team-suit-select';
+                suitSelect.id = `team-suit-${i}`;
+                suitSelect.name = `team-suit-${i}`;
+                suitSelect.setAttribute('aria-label', `Partner card ${i + 1} suit`);
                 suits.forEach(s => suitSelect.appendChild(new Option(s, s)));
 
                 selectorDiv.appendChild(rankSelect); selectorDiv.appendChild(suitSelect);
@@ -413,13 +534,25 @@ function renderGameBoard() {
         let dTeamHtml = ''; let dTotal = 0;
 
         gameState.players.forEach(p => {
+            const clean = cleanPlayerName(p.name);
+            const stats = gameStats[clean.replace(" (H)", "")] || { wins: 0, gamesPlayed: 0, winRate: '0.0%' };
+            const statLine = `<span style="font-size: 11px; opacity: 0.8; display: block;">Career: ${stats.wins}W / ${stats.gamesPlayed - stats.wins}L (${stats.winRate})</span>`;
+            
             if (p.team === 'BIDDER_TEAM') {
-                bTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
+                bTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${p.points} pts</b>${statLine}</div>`;
                 bTotal += p.points;
             } else {
-                dTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
+                dTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${p.points} pts</b>${statLine}</div>`;
                 dTotal += p.points;
             }
+
+            // if (p.team === 'BIDDER_TEAM') {
+            //     bTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
+            //     bTotal += p.points;
+            // } else {
+            //     dTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
+            //     dTotal += p.points;
+            // }
         });
 
         document.getElementById('bidder-stats').innerHTML = bTeamHtml;
@@ -450,14 +583,21 @@ function createCardElement(card, isClickable, isPlayable = true) {
 
 function requestPlayCard(card) {
     if (!isCardPlayable(myPeerId, card)) { alert("You cannot play this card."); return; }
+    playCardSound();
     if (isHost) { handlePlayCard(myPeerId, card); broadcastState(); }
     else if (hostConnection) hostConnection.send({ type: 'ACTION_PLAY_CARD', card: card });
+}
+
+function normalizeName(name) {
+    if (!name) return "";
+    return name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '').trim();
 }
 
 function saveGame() {
     const payload = {
         gameState: gameState,
-        gameStats: gameStats
+        gameStats: gameStats,
+        playerData: playerData
     };
 
     const dataStr = JSON.stringify(payload, null, 2);
@@ -465,7 +605,7 @@ function saveGame() {
 
     const linkElement = document.createElement('a');
     linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', `kalli_tilli_backup_${Date.now()}.json`);
+    linkElement.setAttribute('download', `kaali_tirri_save_${Date.now()}.json`);
     linkElement.click();
 }
 
@@ -484,27 +624,98 @@ function loadGame(event) {
             const parsed = JSON.parse(e.target.result);
 
             if (parsed.gameState) {
-                const currentConnections = gameState.players.map(p => ({ id: p.id, name: p.name }));
+                playerData = parsed.playerData || [];
+                
+                let allCurrentUsers = [];
+                gameState.players.forEach(p => allCurrentUsers.push({ id: p.id, name: p.name }));
+                (gameState.spectators || []).forEach(s => allCurrentUsers.push({ id: s.id, name: s.name }));
+                
+                let uniqueUsers = Array.from(new Map(allCurrentUsers.map(item => [item.id, item])).values());
+                let currentPool = [...uniqueUsers];
+                let leftoverSpectators = [];
+                let idMap = {};
+                
+                let newPlayers = new Array(parsed.gameState.players.length).fill(null);
+
+                // PASS 1: Robust normalized name matching
+                parsed.gameState.players.forEach((savedPlayer, index) => {
+                    const matchIndex = currentPool.findIndex(p => normalizeName(p.name) === normalizeName(savedPlayer.name));
+                    if (matchIndex !== -1) {
+                        const matchedConn = currentPool.splice(matchIndex, 1)[0];
+                        idMap[savedPlayer.id] = matchedConn.id;
+                        savedPlayer.id = matchedConn.id;
+                        newPlayers[index] = savedPlayer;
+                    }
+                });
+
+                // PASS 2: Map unassigned seats
+                parsed.gameState.players.forEach((savedPlayer, index) => {
+                    if (!newPlayers[index]) {
+                        if (currentPool.length > 0) {
+                            const matchedConn = currentPool.shift();
+                            idMap[savedPlayer.id] = matchedConn.id;
+                            savedPlayer.id = matchedConn.id;
+                            savedPlayer.name = matchedConn.name;
+                            newPlayers[index] = savedPlayer;
+                        }
+                    }
+                });
+
+                newPlayers = newPlayers.filter(p => p !== null);
+
+                // PASS 3: Remaining connected users become spectators
+                currentPool.forEach(conn => {
+                    leftoverSpectators.push({ id: conn.id, name: conn.name + " (Spectator)" });
+                });
+
+                parsed.gameState.players = newPlayers;
+                parsed.gameState.spectators = leftoverSpectators;
+
+                if (parsed.gameState.lobbyOrder) {
+                    let newLobbyOrder = [];
+                    parsed.gameState.lobbyOrder.forEach(oldId => {
+                        if (idMap[oldId]) newLobbyOrder.push(idMap[oldId]);
+                    });
+                    leftoverSpectators.forEach(s => newLobbyOrder.push(s.id));
+                    parsed.gameState.lobbyOrder = newLobbyOrder;
+                }
+
+                if (parsed.gameState.highestBid && idMap[parsed.gameState.highestBid.playerId]) {
+                    parsed.gameState.highestBid.playerId = idMap[parsed.gameState.highestBid.playerId];
+                    const bidder = newPlayers.find(p => p.id === parsed.gameState.highestBid.playerId);
+                    if (bidder) parsed.gameState.highestBid.playerName = bidder.name;
+                } else if (parsed.gameState.highestBid) {
+                    parsed.gameState.highestBid.playerId = null;
+                }
+
+                parsed.gameState.board.forEach(card => {
+                    if (idMap[card.playedBy]) card.playedBy = idMap[card.playedBy];
+                });
+
+                if (parsed.gameState.turnIndex >= newPlayers.length) {
+                    parsed.gameState.turnIndex = 0; 
+                }
+
+                // Reset and Auto-Pause
+                parsed.gameState.isPaused = true;
+                parsed.gameState.pausedRemaining = 30000;
+                parsed.gameState.biddingDeadline = null;
+                parsed.gameState.turnDeadline = null;
 
                 gameState = parsed.gameState;
                 gameStats = parsed.gameStats || {};
 
-                currentConnections.forEach((conn, index) => {
-                    if (gameState.players[index]) {
-                        gameState.players[index].id = conn.id;
-                    }
-                });
-
                 broadcastState();
-                alert("Game state and stats restored.");
             } else {
                 throw new Error("Invalid structure");
             }
         } catch(err) {
             alert("Failed to parse the save file.");
+            console.error(err);
         }
     };
     reader.readAsText(file);
+    event.target.value = '';
 }
 
 function openWonCardsModal(player) {
@@ -531,28 +742,20 @@ function openWonCardsModal(player) {
 
 // UI Bindings
 document.getElementById('startGameBtn').addEventListener('click', () => {
-    if (isHost) { startDeal(); broadcastState(); }
+    if (!isHost) return;
+    if (!applySeatSelection()) {
+        alert(`Tick at least ${MIN_PLAYERS} players to start.`);
+        return;
+    }
+    startDeal();
+    broadcastState();
 });
 
 document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
     if (isHost) {
         gameState.phase = 'LOBBY';
 
-        if (gameState.spectators && gameState.spectators.length > 0) {
-            gameState.spectators.forEach(s => {
-                const cleanName = s.name.replace(" (Spectator)", "");
-                gameState.players.push({ 
-                    id: s.id, 
-                    name: cleanName, 
-                    hand: [], 
-                    wonCards: [], 
-                    points: 0, 
-                    currentBid: 0, 
-                    team: 'UNKNOWN' 
-                });
-            });
-            gameState.spectators = [];
-        }
+        gameState.excludedIds = (gameState.spectators || []).map(sp => sp.id);
 
         gameState.players.forEach(p => {
             p.hand = [];

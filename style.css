@@ -240,6 +240,62 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     margin-left: 6px;
 }
 
+.lobby-player-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+.lobby-player-row.is-sitting-out { opacity: 0.6; }
+.seat-check {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--success);
+}
+.lobby-player-row .you-tag { margin-left: 0; }
+.spectating-tag {
+    color: var(--ivory-dim);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 7px;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 999px;
+}
+.lobby-row-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+}
+.move-btn {
+    padding: 4px 9px;
+    font-size: 12px;
+    line-height: 1;
+    margin: 0;
+    border: 1px solid var(--brass-700);
+}
+.move-btn:disabled { opacity: 0.3; cursor: default; }
+.disconnected-tag {
+    color: var(--danger-bright);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 7px;
+    border: 1px solid var(--danger);
+    border-radius: 999px;
+}
+.lobby-summary {
+    margin-top: 14px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ivory-dim);
+    letter-spacing: 0.04em;
+}
+
 #startGameBtn { margin-top: 22px; width: 100%; font-size: 18px; padding: 13px; }
 
 .lobby-utility-row {
@@ -308,6 +364,8 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     align-items: center;
     gap: 6px;
 }
+
+#game-info span#trump-info b { font-size: 18px; }
 
 .trump-suit-display {
     font-size: 26px;
@@ -507,7 +565,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     gap: 75px;
     position: relative;
     overflow: visible;
-    padding-top: 216px;
+    padding-top: 225px;
 }
 
 #opponents-area {
@@ -739,7 +797,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
-    min-height: 36px; /* reserved so the table doesn't jump when the badge/pile appear */
+    min-height: 36px;
     margin-bottom: 10px;
 }
 .my-status-row .your-turn-badge,

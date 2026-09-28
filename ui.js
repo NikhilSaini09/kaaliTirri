@@ -1,7 +1,7 @@
 window.addEventListener('beforeunload', (event) => {
     if (gameState.phase !== 'LOBBY' || gameState.players.length > 1) {
         event.preventDefault();
-        event.returnValue = ''; // Standard trigger for modern browsers
+        event.returnValue = '';
     }
 });
 
@@ -37,9 +37,8 @@ function renderLobby() {
         const pDiv = document.createElement('div');
         pDiv.className = 'lobby-player-row';
 
-        const isPlayerHost = player.name.includes('(Host)');
         const displayName = cleanPlayerName(player.name);
-        let html = `<span>${isPlayerHost ? '<span title="Host">👑</span> ' : ''}${displayName}${player.id === myPeerId ? '<span class="you-tag">YOU</span>' : ''}</span>`;
+        let html = `<span>${displayName}${player.id === myPeerId ? '<span class="you-tag">YOU</span>' : ''}</span>`;
         if (isHost && player.id !== myPeerId) {
             html += `<button class="btn-danger" onclick="kickPlayer('${player.id}')" style="padding: 5px 12px; font-size: 13px;">Kick</button>`;
         }
@@ -60,7 +59,7 @@ function startTimerBarLoop(deadline, totalMs, label) {
     const labelEl = document.getElementById('timer-bar-label');
     if (labelEl) labelEl.textContent = label || '';
 
-    if (timerBarDeadline === deadline && timerBarInterval) return; // already tracking this window
+    if (timerBarDeadline === deadline && timerBarInterval) return;
     timerBarDeadline = deadline;
     if (timerBarInterval) clearInterval(timerBarInterval);
 
@@ -92,7 +91,7 @@ function stopTimerBarLoop() {
 }
 
 function cleanPlayerName(name) {
-    return name.replace(' (Host)', '').replace(' (Spectator)', '');
+    return name.replace(' (Host)', ' (H)').replace(' (Spectator)', ' (S)');
 }
 
 function renderGameBoard() {
@@ -114,8 +113,6 @@ function renderGameBoard() {
     document.getElementById('phase-display').innerHTML = `Phase: <span class="phase-label">${PHASE_LABELS[gameState.phase] || gameState.phase}</span>`;
     hostControls.style.display = isHost ? 'block' : 'none';
 
-    // Pause: a host-only toggle that freezes the game clock and blocks every action
-    // until resumed. Shown to everyone so no one is left wondering why nothing moves.
     const pauseOverlay = document.getElementById('pause-overlay');
     pauseOverlay.style.display = gameState.isPaused ? 'flex' : 'none';
     const resumeBtn = document.getElementById('resumeFromOverlayBtn');
@@ -123,12 +120,10 @@ function renderGameBoard() {
     const pauseMenuBtn = document.getElementById('hostPauseBtn');
     if (pauseMenuBtn) pauseMenuBtn.textContent = gameState.isPaused ? '▶ Resume Game' : '⏸ Pause Game';
 
-    // Whose turn is it right now (only meaningful once cards are being played)?
     const activeTurnPlayer = (gameState.phase === 'PLAYING' && gameState.players.length > 0)
         ? gameState.players[gameState.turnIndex]
         : null;
 
-    // Countdown: bidding window, or the current player's 30s turn clock
     if (gameState.phase === 'BIDDING' && gameState.biddingDeadline) {
         timerWrap.classList.add('is-visible');
         startTimerBarLoop(gameState.biddingDeadline, BIDDING_TIME_MS, 'Bidding');
@@ -141,8 +136,6 @@ function renderGameBoard() {
         stopTimerBarLoop();
     }
 
-    // Order opponents by turn sequence (starting with whoever plays right after me) so the
-    // row reads left-to-right in the order they'll actually play - not an arbitrary seat order.
     const myIndex = gameState.players.findIndex(p => p.id === myPeerId);
     const n = gameState.players.length;
     let opponents;
@@ -150,57 +143,80 @@ function renderGameBoard() {
         opponents = [];
         for (let i = 1; i < n; i++) opponents.push(gameState.players[(myIndex + i) % n]);
     } else {
-        // Spectator: no personal seat to order from, just show the table's fixed seating order.
         opponents = gameState.players.slice();
     }
 
-    const isMobile = window.innerWidth <= 640;
+    const isMobile = window.innerWidth <= 860;
     oppArea.classList.toggle('mobile-row', isMobile);
+    const totalOpp = opponents.length;
+    const dense = totalOpp >= 5;
+    boardArea.classList.toggle('dense-table', gameState.players.length >= 6);
 
-    // Seats are fixed roles rather than a smooth circle: the first player to act after me
-    // sits on the left, the next straight across the table, the last on the right. Left/right
-    // seats differ from the top seat in both height and distance, so it's obvious who is where.
-    // Values are % of the table's own box; anything outside 0-100 sits beyond its rim.
+    const SEAT_SPAN = 240, SEAT_START = 150;
+    const seatAngle = {};
+    opponents.forEach((player, index) => {
+        seatAngle[player.id] = (SEAT_START + (index + 0.5) * SEAT_SPAN / totalOpp) * Math.PI / 180;
+    });
+
+    const tableWrapperEl = document.getElementById('table-wrapper');
+    const tRect = tableWrapperEl.getBoundingClientRect();
+    const tW = tRect.width || 380;
+    const headerBottom = Math.max(
+        document.getElementById('game-header').getBoundingClientRect().bottom,
+        document.getElementById('status-stack').getBoundingClientRect().bottom
+    );
+    const halfW = dense ? 62 : 72, halfH = dense ? 54 : 62;
+
     function getSeatOffsetPct(index, total) {
         if (total === 1) return { left: 50, top: -38 };
         if (total === 2) return [{ left: -40, top: 50 }, { left: 140, top: 50 }][index];
         if (total === 3) return [{ left: -40, top: 56 }, { left: 50, top: -38 }, { left: 140, top: 56 }][index];
-        const step = Math.PI / (total + 1);
-        const ang = step * (index + 1);
-        return { left: 50 - Math.cos(ang) * 90, top: 50 - Math.sin(ang) * 80 };
+        const maxRxPx = window.innerWidth / 2 - halfW - 8;
+        const maxRyPx = (tRect.top + tW / 2) - headerBottom - halfH - 8;
+        const rxPx = Math.max(tW * 0.62, Math.min(tW * 1.0, maxRxPx));
+        const ryPx = Math.max(tW * 0.6, Math.min(tW * 0.82, maxRyPx));
+        const ang = seatAngle[opponents[index].id];
+        return { left: 50 + Math.cos(ang) * rxPx / tW * 100, top: 50 + Math.sin(ang) * ryPx / tW * 100 };
+    }
+    function clampSeat(pos) {
+        const x = tRect.left + pos.left / 100 * tW;
+        const y = tRect.top + pos.top / 100 * tW;
+        const cx = Math.min(Math.max(x, halfW + 6), window.innerWidth - halfW - 6);
+        const cy = Math.max(y, headerBottom + halfH + 6);
+        return { left: (cx - tRect.left) / tW * 100, top: (cy - tRect.top) / tW * 100 };
     }
     const seatPos = {};
-    opponents.forEach((player, index) => {
-        seatPos[player.id] = getSeatOffsetPct(index, opponents.length);
-    });
+    if (!isMobile) {
+        opponents.forEach((player, index) => {
+            seatPos[player.id] = clampSeat(getSeatOffsetPct(index, totalOpp));
+        });
+    }
 
-    // 1. Center Board (Played Cards) - each card sits toward the side of the table its player occupies
+    // 1. Center Board
     gameState.board.forEach((card) => {
         const cardEl = createCardElement(card, false);
         cardEl.classList.add('played-card');
         const rotation = (Math.random() * 12 - 6);
         cardEl.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
 
+        const CARD_R = isMobile ? 32 : 30;
         let leftPct = 50, topPct = 50;
         if (card.playedBy === myPeerId) {
-            leftPct = 50; topPct = 78;
-        } else if (seatPos[card.playedBy]) {
-            const dx = seatPos[card.playedBy].left - 50;
-            const dy = seatPos[card.playedBy].top - 50;
-            const len = Math.hypot(dx, dy) || 1;
-            leftPct = 50 + (dx / len) * 30;
-            topPct = 50 + (dy / len) * 30;
+            leftPct = 50; topPct = 50 + CARD_R;
+        } else if (seatAngle[card.playedBy] !== undefined) {
+            const ang = seatAngle[card.playedBy];
+            leftPct = 50 + Math.cos(ang) * CARD_R;
+            topPct = 50 + Math.sin(ang) * CARD_R;
         }
         cardEl.style.left = `${leftPct}%`;
         cardEl.style.top = `${topPct}%`;
         boardArea.appendChild(cardEl);
     });
 
-    // 2. Opponents - no rotation. Desktop: seated around the table with a clear gap.
-    // Mobile: a compact row of turn-ordered chips above the table, without card visuals.
-    opponents.forEach((player, index) => {
+    // 2. Opponents
+    opponents.forEach((player) => {
         const oppDiv = document.createElement('div');
-        oppDiv.className = 'opponent-container' + (isMobile ? ' compact' : '');
+        oppDiv.className = 'opponent-container' + (isMobile ? ' compact' : '') + (dense ? ' dense' : '');
 
         const isActiveTurn = activeTurnPlayer && activeTurnPlayer.id === player.id;
         const showFoldState = (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
@@ -216,27 +232,25 @@ function renderGameBoard() {
         }
 
         let teamIcon = player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : '');
-        const isPlayerHost = player.name.includes('(Host)');
         const cleanName = cleanPlayerName(player.name);
 
         let pileHtml = '';
         if (player.wonCards && player.wonCards.length > 0) {
             pileHtml = isMobile
-                ? `<div class="won-pile-btn" title="Click to view won cards"><span>${player.wonCards.length} won</span></div>`
-                : `
-                <div class="won-pile-btn" title="Click to view won cards">
-                    <div class="card face-down mini-card"></div>
-                    <span>${player.wonCards.length} won</span>
+                ? `<div class="won-pile-btn" title="Click to view won cards"><span>${player.wonCards.length}</span></div>`
+                : // <div class="card face-down mini-card"></div>
+                ` <div class="won-pile-btn" title="Click to view won cards">
+                    <span>${player.wonCards.length}</span>
                 </div>
             `;
         }
 
         const fanHtml = isMobile ? '' :
-            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length, 5))}</div>`;
+            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length / 4 + 1, 4))}</div>`;
 
         oppDiv.innerHTML = `
-            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${isPlayerHost ? '<span title="Host">👑</span> ' : ''}${teamIcon}${cleanName}</span>
-            <span class="opp-meta">${player.hand.length} 🃏 &middot; ${player.points} pts</span>
+            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${cleanName}</span>
+            <span class="opp-meta">${player.hand.length} C &middot; ${player.points} Pts</span>
             ${fanHtml}
             ${isFolded ? '<span class="fold-tag">FOLDED</span>' : ''}
             ${pileHtml}
@@ -253,7 +267,9 @@ function renderGameBoard() {
         oppArea.appendChild(oppDiv);
     });
 
-    // Panels - visible to players and spectators alike, so this runs regardless of "me"
+    const tableZoneEl = document.querySelector('.table-zone');
+    tableZoneEl.style.paddingTop = isMobile ? `${Math.max(84, oppArea.offsetHeight + 28)}px` : '';
+
     if (gameState.phase !== 'LOBBY') {
         gameInfo.style.display = 'inline-flex';
         if (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION') {
@@ -279,11 +295,14 @@ function renderGameBoard() {
     const me = gameState.players.find(p => p.id === myPeerId);
     if (me) {
         const isMyTurn = activeTurnPlayer && activeTurnPlayer.id === me.id;
+        const statusRow = document.createElement('div');
+        statusRow.className = 'my-status-row';
+        myArea.appendChild(statusRow);
         if (isMyTurn) {
             const badge = document.createElement('div');
             badge.className = 'your-turn-badge';
             badge.innerHTML = '<span class="turn-dot"></span> Your Turn';
-            myArea.appendChild(badge);
+            statusRow.appendChild(badge);
         }
 
         me.hand.forEach((card, index) => {
@@ -299,16 +318,13 @@ function renderGameBoard() {
             myArea.appendChild(wrapper);
         });
 
-        // Size (never overlap) the hand to fit the available width. Cards shrink down to a
-        // legible minimum before anything wraps to a second row - and on a wide screen they
-        // can grow back up to their natural size instead of staying artificially small.
         const cardWrappers = myArea.querySelectorAll('.my-card-wrapper');
         if (cardWrappers.length > 0) {
             const cardCount = cardWrappers.length;
             const gap = 8;
             const naturalWidth = window.innerWidth <= 640 ? 46 : 65;
             const minWidth = window.innerWidth <= 640 ? 30 : 40;
-            const availWidth = myArea.clientWidth - 44; // #my-area has 20px padding each side
+            const availWidth = myArea.clientWidth - 44;
             let cardW = Math.floor((availWidth - (cardCount - 1) * gap) / cardCount);
             cardW = Math.max(minWidth, Math.min(naturalWidth, cardW));
             const cardH = Math.round(cardW * 1.42);
@@ -327,20 +343,18 @@ function renderGameBoard() {
             });
         }
 
-        // Add clickable won pile for the local player if they have won cards
         if (me.wonCards && me.wonCards.length > 0) {
             const myPileDiv = document.createElement('div');
             myPileDiv.className = 'my-won-pile';
             myPileDiv.title = "Click to view your won cards";
+                 // <div class="card face-down mini-card"></div>
             myPileDiv.innerHTML = `
-                <div class="card face-down mini-card"></div>
-                <span>${me.wonCards.length} won (${me.points} pts)</span>
+                <span>${me.wonCards.length} (${me.points} pts)</span>
             `;
             myPileDiv.addEventListener('click', () => openWonCardsModal(me));
-            myArea.appendChild(myPileDiv);
+            statusRow.appendChild(myPileDiv);
         }
 
-        // Fold status banner for the local player
         if (me.hasFolded && (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION')) {
             foldBanner.textContent = "You folded — waiting for the rest of the table";
             foldBanner.style.display = 'block';
@@ -348,7 +362,6 @@ function renderGameBoard() {
             foldBanner.style.display = 'none';
         }
 
-        // Action Overlay Routing
         let showOverlay = false;
         biddingPanel.style.display = 'none';
         trumpPanel.style.display = 'none';
@@ -363,7 +376,6 @@ function renderGameBoard() {
             bidInput.max = MAX_BID;
             bidInput.placeholder = `${minBid}\u2013${MAX_BID}`;
 
-            // Set default value automatically to make bidding faster
             bidInput.value = minBid;
         }
         else if (gameState.phase === 'TRUMP_SELECTION' && gameState.highestBid.playerId === myPeerId) {
@@ -392,7 +404,7 @@ function renderGameBoard() {
         actionOverlay.classList.toggle('no-dim', gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
     }
 
-    // 6. Game Over Modal
+    // 4. Game Over Modal
     if (gameState.phase === 'GAMEOVER') {
         scorecard.style.display = 'block';
         modalBtn.style.display = isHost ? 'block' : 'none';
@@ -472,13 +484,11 @@ function loadGame(event) {
             const parsed = JSON.parse(e.target.result);
 
             if (parsed.gameState) {
-                // Preserve current network IDs while taking game state data
                 const currentConnections = gameState.players.map(p => ({ id: p.id, name: p.name }));
 
                 gameState = parsed.gameState;
                 gameStats = parsed.gameStats || {};
 
-                // Re-bind connected player IDs to loaded records
                 currentConnections.forEach((conn, index) => {
                     if (gameState.players[index]) {
                         gameState.players[index].id = conn.id;
@@ -528,7 +538,6 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
     if (isHost) {
         gameState.phase = 'LOBBY';
 
-        // Merge any spectators into active players
         if (gameState.spectators && gameState.spectators.length > 0) {
             gameState.spectators.forEach(s => {
                 const cleanName = s.name.replace(" (Spectator)", "");
@@ -545,7 +554,6 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
             gameState.spectators = [];
         }
 
-        // Reset round-specific player properties
         gameState.players.forEach(p => {
             p.hand = [];
             p.wonCards = [];
@@ -627,7 +635,6 @@ document.getElementById('hostMenuToggle')?.addEventListener('click', (e) => {
     menu.style.display = (currentDisplay === 'none') ? 'flex' : 'none';
 });
 
-// Close the settings menu when clicking anywhere outside it
 document.addEventListener('click', (e) => {
     const wrapper = document.getElementById('host-controls-wrapper');
     if (wrapper && !wrapper.contains(e.target)) closeHostMenu();
@@ -654,10 +661,9 @@ document.getElementById('loadInput')?.addEventListener('change', loadGame);
 document.getElementById('hostSaveBtn')?.addEventListener('click', () => { saveGame(); closeHostMenu(); });
 document.getElementById('hostLoadInput')?.addEventListener('change', (e) => { loadGame(e); closeHostMenu(); });
 
-// Switch between the desktop seating layout and the mobile row when the viewport crosses the breakpoint.
-let lastIsMobile = window.innerWidth <= 850;
+let lastIsMobile = window.innerWidth <= 860;
 window.addEventListener('resize', () => {
-    const nowMobile = window.innerWidth <= 640;
+    const nowMobile = window.innerWidth <= 860;
     if (nowMobile !== lastIsMobile) {
         lastIsMobile = nowMobile;
         if (gameState.phase !== 'LOBBY' && document.getElementById('view-game').style.display !== 'none') renderGameBoard();

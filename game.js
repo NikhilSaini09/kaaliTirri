@@ -18,7 +18,6 @@ const MAX_BID = 250;
 const BIDDING_TIME_MS = 30000;
 const TURN_TIME_MS = 30000;
 
-// --- State Structure ---
 let gameState = {
     phase: 'LOBBY',       // LOBBY, BIDDING, TRUMP_SELECTION, PLAYING, TRICK_EVALUATION, GAMEOVER
     deck: [],
@@ -29,15 +28,15 @@ let gameState = {
     highestBid: { playerId: null, amount: 0, playerName: "" },
     trumpSuit: null,      
     calledCards: [],
-    originalCalledCards: [], // the partner card(s) as chosen - kept even after they're revealed/removed from calledCards
+    originalCalledCards: [],
     spectators: [],
-    biddingDeadline: null, // epoch ms; host auto-resolves bidding once this passes
-    turnDeadline: null,    // epoch ms; host auto-plays a card once this passes during PLAYING
+    biddingDeadline: null,
+    turnDeadline: null,
     isPaused: false,
     pausedRemaining: null
 };
-let gameStats = {}; 
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
+let gameStats = {}; 
 
 function generateDeck() {
     let deck = [];
@@ -87,14 +86,11 @@ function handlePlayCard(playerId, playedCard) {
         card.playedBy = playerId; 
         gameState.board.push(card);
         
-        // Team Reveal Logic
         const cardStr = `${card.value}${card.suit}`;
         if (gameState.calledCards.includes(cardStr)) {
             player.team = 'BIDDER_TEAM';
             gameState.calledCards = gameState.calledCards.filter(c => c !== cardStr);
 
-            // Once ALL called cards have appeared on the table,
-            // everyone remaining who isn't on the bidder team is officially exposed as a DEFENDER
             if (gameState.calledCards.length === 0) {
                 gameState.players.forEach(p => {
                     if (p.team === 'UNKNOWN') {
@@ -105,12 +101,11 @@ function handlePlayCard(playerId, playedCard) {
         }
 
         if (gameState.board.length === gameState.players.length) {
-            // Lock board for evaluation
             gameState.phase = 'TRICK_EVALUATION';
             gameState.turnDeadline = null;
             setTimeout(() => {
                 evaluateTrick();
-                broadcastState(); // Broadcast after evaluation finishes
+                broadcastState();
             }, 2000);
         } else {
             gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
@@ -169,11 +164,9 @@ function evaluateRoundEnd() {
 
     const bidderWon = bTotal >= gameState.highestBid.amount;
 
-    // Record stats permanently by player name without affecting gameplay
     gameState.players.forEach(p => {
-        if(p.name.includes("(Spectator)")) return; // Skip spectators
-        // Strip out temporary host/spectator labels for clean keys
-        const cleanName = p.name.replace(" (Host)", "").replace(" (Spectator)", "").trim();
+        if(p.name.includes("(Spectator)")) return;
+        const cleanName = p.name.replace(" (Host)", "").trim();
         
         if (!gameStats[cleanName]) {
             gameStats[cleanName] = { gamesPlayed: 0, wins: 0, losses: 0 };
@@ -231,16 +224,14 @@ function startDeal() {
         p.wonCards = [];
         p.hasFolded = false;
         p.points = 0;
-        p.team = 'UNKNOWN'; // Reset teams
+        p.team = 'UNKNOWN';
     });
 
-    // No countdown until the first bid is placed - everyone gets a look at their hand first.
     gameState.biddingDeadline = null;
     gameState.turnDeadline = null;
     gameState.isPaused = false;
     gameState.pausedRemaining = null;
 
-    // 6. Deal the playable deck evenly
     let currentPlayer = 0;
     while (gameState.deck.length > 0) {
         gameState.players[currentPlayer].hand.push(gameState.deck.pop());
@@ -266,7 +257,7 @@ function handlePlaceBid(playerId, amount) {
 
     if (amt > gameState.highestBid.amount) {
         gameState.highestBid = { playerId: playerId, amount: amt, playerName: player.name };
-        resetBiddingTimer(); // a new high bid gives everyone else a fresh window to respond
+        resetBiddingTimer();
 
         const activePlayers = gameState.players.filter(p => !p.hasFolded);
         if (activePlayers.length === 1 || amt === MAX_BID) {
@@ -289,7 +280,6 @@ function handleFold(playerId) {
     const activePlayers = gameState.players.filter(p => !p.hasFolded);
 
     if (activePlayers.length === 0) {
-        // Trigger a re-deal automatically
         startDeal(); 
         return;
     }
@@ -299,7 +289,6 @@ function handleFold(playerId) {
     }
 }
 
-// Gives the table a fresh 30-second window to bid or fold.
 function resetBiddingTimer() {
     gameState.biddingDeadline = Date.now() + BIDDING_TIME_MS;
 }
@@ -311,14 +300,12 @@ function checkBiddingTimeout() {
     if (Date.now() < gameState.biddingDeadline) return;
 
     if (gameState.highestBid.playerId === null) {
-        // Nobody bid at all in time — hand a random active player the minimum bid.
         const active = gameState.players.filter(p => !p.hasFolded);
         if (active.length === 0) { startDeal(); broadcastState(); return; }
         const randomPlayer = active[Math.floor(Math.random() * active.length)];
         gameState.highestBid = { playerId: randomPlayer.id, amount: MIN_BID, playerName: randomPlayer.name };
         gameState.phase = 'TRUMP_SELECTION';
     } else {
-        // Everyone who hasn't matched the high bid is timed out and folded.
         gameState.players.forEach(p => {
             if (p.id !== gameState.highestBid.playerId && !p.hasFolded) p.hasFolded = true;
         });
@@ -329,10 +316,8 @@ function checkBiddingTimeout() {
     broadcastState();
 }
 
-// Ticks once a second; only the host acts on it, but it's harmless to run everywhere.
 setInterval(checkBiddingTimeout, 1000);
 
-// Gives the current player a fresh 30-second window to play a card.
 function resetTurnTimer() {
     gameState.turnDeadline = Date.now() + TURN_TIME_MS;
 }
@@ -346,7 +331,6 @@ function checkTurnTimeout() {
     const player = gameState.players[gameState.turnIndex];
     if (!player) { gameState.turnDeadline = null; return; }
 
-    // Auto-play a random legal card on the player's behalf so the table isn't stuck.
     const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
     const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
 
@@ -360,8 +344,6 @@ function checkTurnTimeout() {
 
 setInterval(checkTurnTimeout, 1000);
 
-// Host-only: freezes/unfreezes the game clock and blocks actions while paused.
-// Remaining time on whichever timer is running is preserved across the pause.
 function togglePause() {
     if (!isHost) return;
 
@@ -407,12 +389,10 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
 }
 
 function getSanitizedStateForClient(clientId) {
-    // Create a deep copy of the state
     let safeState = JSON.parse(JSON.stringify(gameState));
     
     safeState.players.forEach(p => {
         if (p.id !== clientId) {
-            // Scrub other players' cards, only keep the length
             const cardCount = p.hand.length;
             p.hand = new Array(cardCount).fill(null);
         }

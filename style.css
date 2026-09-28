@@ -102,8 +102,6 @@ button:disabled {
 .btn-wood    { background: linear-gradient(180deg, var(--walnut-700), var(--walnut-800)); color: var(--ivory); }
 .btn-ghost   { background: rgba(255,255,255,0.08); color: var(--ivory); border-color: rgba(255,255,255,0.2); }
 
-/* <label> elements used as buttons (e.g. "Load Save") don't get the base button/input/select
-   box model, so they need it spelled out explicitly or they render undersized and misaligned. */
 label.btn-brass, label.btn-success, label.btn-danger, label.btn-info, label.btn-wood, label.btn-ghost {
     display: inline-flex;
     align-items: center;
@@ -194,7 +192,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 #view-lobby {
     width: 92%;
-    max-width: 560px;
+    max-width: 600px;
     margin: 6vh auto;
     background: linear-gradient(180deg, var(--walnut-700), var(--walnut-900));
     border: 1px solid var(--brass-700);
@@ -311,8 +309,6 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     gap: 6px;
 }
 
-/* Trump suit and partner card(s) are the two things people squint at mid-game -
-   sized up well beyond the chip's normal 14px text without changing the chip itself. */
 .trump-suit-display {
     font-size: 26px;
     line-height: 1;
@@ -320,7 +316,6 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     display: inline-block;
     margin: 0 1px;
 }
-
 
 #status-stack {
     position: relative;
@@ -384,7 +379,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 #host-controls-wrapper {
     position: relative;
     display: none;
-    margin-left: 36px; /* clear separation from the game-info chip so the gear doesn't crowd it */
+    margin-left: 36px;
 }
 
 #hostMenuToggle {
@@ -432,8 +427,6 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     background: transparent;
 }
 
-/* Full-screen block while the host has paused the game - sits above everything else,
-   including the bid/trump panels, so no one can act until it's resumed. */
 #pause-overlay {
     display: none;
     position: absolute;
@@ -511,14 +504,12 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    gap: 75px; /* the one gap left in this column now sits between the table and your hand */
+    gap: 75px;
     position: relative;
     overflow: visible;
     padding-top: 216px;
 }
 
-/* Nested inside #table-wrapper (see index.html) so every seat's position is a simple
-   percentage of the table's own box, whatever size that box renders at. */
 #opponents-area {
     position: absolute;
     inset: 0;
@@ -526,8 +517,6 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     z-index: 40;
 }
 
-/* Mobile: no seating circle - a compact turn-ordered row sits right above the table
-   (table-zone reserves the room for it, see the media query). */
 #opponents-area.mobile-row {
     inset: auto;
     left: 50%;
@@ -582,8 +571,6 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     padding: 0 20px;
 }
 
-/* Each seat is placed by JS (left/top/rotate, all percentages of the table's own box)
-   so chips read as sitting in a circle around the table rather than in a row above it. */
 .opponent-container {
     position: absolute;
     left: 50%;
@@ -593,6 +580,8 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     flex-direction: column;
     align-items: center;
     gap: 5px;
+    white-space: nowrap;
+    min-width: 112px;
     background: rgba(10,20,15,0.55);
     border: 1px solid rgba(255,255,255,0.1);
     padding: 12px 22px;
@@ -606,6 +595,11 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 .opponent-container .opp-name { display: flex; align-items: center; gap: 6px; }
 .opponent-container .opp-meta { font-size: 14px; font-weight: 500; opacity: 0.85; }
+
+.opponent-container.dense { font-size: 14px; padding: 8px 14px; min-width: 96px; gap: 3px; }
+.opponent-container.dense .opp-meta { font-size: 12px; }
+.opponent-container.dense .hand-fan { height: 30px; }
+.opponent-container.dense .hand-fan-card { margin-left: -13px; }
 
 .opponent-container.compact {
     padding: 5px 10px;
@@ -716,9 +710,6 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 }
 .card-rank { line-height: 1; }
 .card-suit {
-    /* Display/serif faces frequently lack suit glyphs and silently fall back to an
-       empty/invisible glyph - force a font stack that reliably draws them, especially
-       the solid black spade/club symbols. */
     font-family: 'Segoe UI Symbol', 'Noto Sans Symbols2', 'DejaVu Sans', Arial, sans-serif;
     font-size: 22px;
     line-height: 1;
@@ -726,6 +717,9 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 .red { color: var(--red-suit); }
 .black { color: #000; }
+
+.dense-table .played-card { width: 42px; height: 60px; }
+.my-status-row { display: contents; }
 
 .played-card {
     position: absolute;
@@ -844,7 +838,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     min-height: 100px;
 }
 
-@media (max-width: 850px) {
+@media (max-width: 860px) {
     .card { width: 46px; height: 66px; font-size: 13px; border-radius: 6px; gap: 1px; }
     .card-suit { font-size: 15px; }
     .mini-card { width: 18px !important; height: 27px !important; }
@@ -860,10 +854,13 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     #view-lobby { padding: 22px; width: 94%; }
     .lobby-utility-row { flex-direction: column; }
 
-    #game-header { padding: 10px; flex-wrap: wrap; gap: 6px; }
+    #game-header { padding: 10px; flex-wrap: wrap; gap: 6px; align-items: center; }
+    #phase-display { order: 1; }
+    #host-controls-wrapper { order: 2; margin-left: auto; }
+    #game-info { order: 3; flex-basis: 100%; justify-content: center; flex-wrap: wrap; gap: 2px 8px; border-radius: 18px; padding: 4px 12px; text-align: center; }
+    #game-info span#trump-info { margin-left: 0; border-left: none; padding-left: 0; }
     .chip { padding: 6px 12px; font-size: 12px; }
     #game-info { font-size: 12px; }
-    #host-controls-wrapper { margin-left: 14px; }
     .trump-suit-display { font-size: 20px; }
 
     #timer-bar-wrap { min-width: 280px; width: 92%; padding: 5px 10px; gap: 6px; }
@@ -871,7 +868,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     #timer-bar-text { font-size: 11px; min-width: 28px; }
 
     .table-zone { gap: 65px; padding-top: 84px; }
-    #table-wrapper { width: min(240px, 60vw); height: min(240px, 60vw); }
+    #table-wrapper { width: min(250px, 72vw); height: min(250px, 72vw); }
 
     #host-dropdown { min-width: 150px; right: -10px; }
     #host-dropdown button, #host-dropdown label { font-size: 13px; padding: 8px 12px; }
@@ -882,8 +879,14 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
     .pause-card { padding: 26px 24px; }
 
-    .my-won-pile { top: 58px; right: 8px; font-size: 11px; padding: 6px 10px; }
+    .my-status-row { display: flex; width: 100%; justify-content: center; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+    .my-status-row:empty { display: none; }
+    .my-status-row .your-turn-badge, .my-status-row .my-won-pile { position: static; transform: none; margin: 0; top: auto; right: auto; }
+    .my-won-pile { font-size: 11px; padding: 5px 10px; }
     .your-turn-badge { font-size: 11px; padding: 5px 11px; }
+    .opponent-container.compact { min-width: 58px; }
+    .dense-table .played-card { width: 30px; height: 44px; font-size: 11px; }
+    .dense-table .played-card .card-suit { font-size: 12px; }
 
     .modal-card { padding: 18px; width: 92%; }
     .score-columns { gap: 10px; }

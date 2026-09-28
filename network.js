@@ -73,19 +73,17 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         conn.on('data', (data) => {
             if (data.type === 'JOIN_LOBBY') {
                 if (gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
-                    // Add as spectator instead of rejecting
                     gameState.spectators.push({ id: conn.peer, name: data.name + " (Spectator)" });
-                    // Send them a special flag so their UI knows they are spectating
                     conn.send({ type: 'STATE_UPDATE', state: gameState, isSpectator: true });
                 } else {
                     gameState.players.push({ id: conn.peer, name: data.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
                 }
                 broadcastState();
             }
-            if (data.type === 'ACTION_PLAY_CARD') { handlePlayCard(conn.peer, data.card); broadcastState(); }
             if (data.type === 'ACTION_PLACE_BID') { handlePlaceBid(conn.peer, data.amount); broadcastState(); }
             if (data.type === 'ACTION_FOLD') { handleFold(conn.peer); broadcastState(); }
             if (data.type === 'ACTION_SET_TRUMP') { handleSetTrump(conn.peer, data.suit, data.cards); broadcastState(); }
+            if (data.type === 'ACTION_PLAY_CARD') { handlePlayCard(conn.peer, data.card); broadcastState(); }
         });
     });
 });

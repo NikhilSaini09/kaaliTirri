@@ -320,32 +320,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     display: inline-block;
     margin: 0 1px;
 }
-.partner-label { margin-left: 2px; }
-.partner-cards-row {
-    display: inline-flex;
-    gap: 4px;
-    margin-left: 4px;
-    vertical-align: middle;
-}
-.partner-card-chip {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 42px;
-    background: var(--ivory);
-    border-radius: 5px;
-    border: 1px solid rgba(0,0,0,0.3);
-    font-family: var(--font-display);
-    font-weight: 700;
-    line-height: 1.1;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-}
-.partner-card-chip .pcc-rank { font-size: 13px; }
-.partner-card-chip .pcc-suit { font-size: 15px; }
-.partner-card-chip.red { color: var(--red-suit); }
-.partner-card-chip.black { color: #000; }
+
 
 #status-stack {
     position: relative;
@@ -539,7 +514,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     gap: 75px; /* the one gap left in this column now sits between the table and your hand */
     position: relative;
     overflow: visible;
-    padding-top: 6px;
+    padding-top: 216px;
 }
 
 /* Nested inside #table-wrapper (see index.html) so every seat's position is a simple
@@ -549,6 +524,26 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     inset: 0;
     pointer-events: none;
     z-index: 40;
+}
+
+/* Mobile: no seating circle - a compact turn-ordered row sits right above the table
+   (table-zone reserves the room for it, see the media query). */
+#opponents-area.mobile-row {
+    inset: auto;
+    left: 50%;
+    bottom: 100%;
+    transform: translateX(-50%);
+    margin-bottom: 65px;
+    width: 96vw;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 6px;
+}
+#opponents-area.mobile-row .opponent-container {
+    position: static;
+    transform: none;
 }
 
 #table-wrapper {
@@ -597,20 +592,20 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 3px;
+    gap: 5px;
     background: rgba(10,20,15,0.55);
     border: 1px solid rgba(255,255,255,0.1);
-    padding: 8px 14px;
-    border-radius: 12px;
+    padding: 12px 22px;
+    border-radius: 14px;
     color: var(--ivory);
-    font-size: 14px;
+    font-size: 17px;
     font-weight: 700;
     box-shadow: var(--shadow-soft);
     transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .opponent-container .opp-name { display: flex; align-items: center; gap: 6px; }
-.opponent-container .opp-meta { font-size: 12px; font-weight: 500; opacity: 0.85; }
+.opponent-container .opp-meta { font-size: 14px; font-weight: 500; opacity: 0.85; }
 
 .opponent-container.compact {
     padding: 5px 10px;
@@ -734,6 +729,9 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 .played-card {
     position: absolute;
+    width: 50px;
+    height: 72px;
+    border-radius: 6px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.55);
 }
 
@@ -846,14 +844,15 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     min-height: 100px;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 850px) {
     .card { width: 46px; height: 66px; font-size: 13px; border-radius: 6px; gap: 1px; }
     .card-suit { font-size: 15px; }
     .mini-card { width: 18px !important; height: 27px !important; }
-    .hand-fan { height: 27px; }
-    .hand-fan-card { margin-left: -12px; }
-    .opponent-container { font-size: 11px; padding: 5px 9px; gap: 2px; }
+    .opponent-container, .opponent-container.compact { font-size: 11px; padding: 4px 8px; gap: 1px; border-radius: 9px; }
     .opponent-container .opp-meta { font-size: 10px; }
+    .opponent-container .won-pile-btn { padding: 2px 6px; font-size: 10px; margin-top: 2px; }
+    .played-card { width: 36px; height: 52px; }
+    .played-card.card { font-size: 12px; }
     .brand { font-size: 2.2rem; }
     .brand-suit-row { font-size: 1.1rem; margin-bottom: 20px; }
     .landing-card { padding: 20px; }
@@ -866,16 +865,13 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     #game-info { font-size: 12px; }
     #host-controls-wrapper { margin-left: 14px; }
     .trump-suit-display { font-size: 20px; }
-    .partner-card-chip { width: 24px; height: 34px; }
-    .partner-card-chip .pcc-rank { font-size: 10px; }
-    .partner-card-chip .pcc-suit { font-size: 12px; }
 
     #timer-bar-wrap { min-width: 280px; width: 92%; padding: 5px 10px; gap: 6px; }
     #timer-bar-label { max-width: 60px; font-size: 10px; }
     #timer-bar-text { font-size: 11px; min-width: 28px; }
 
-    .table-zone { gap: 60px; }
-    #table-wrapper { width: min(320px, 78vw); height: min(320px, 78vw); }
+    .table-zone { gap: 65px; padding-top: 84px; }
+    #table-wrapper { width: min(240px, 60vw); height: min(240px, 60vw); }
 
     #host-dropdown { min-width: 150px; right: -10px; }
     #host-dropdown button, #host-dropdown label { font-size: 13px; padding: 8px 12px; }

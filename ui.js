@@ -154,42 +154,53 @@ function renderGameBoard() {
         opponents = gameState.players.slice();
     }
 
-    // Seat angles double as the position for both the opponent chip (drawn just outside
-    // the table's rim) and that player's played card (drawn just inside it) - so a card
-    // always appears on the same side of the table as the person who played it.
-    const angleStep = Math.PI / (opponents.length + 1);
-    const seatAngles = {};
+    const isMobile = window.innerWidth <= 640;
+    oppArea.classList.toggle('mobile-row', isMobile);
+
+    // Seats are fixed roles rather than a smooth circle: the first player to act after me
+    // sits on the left, the next straight across the table, the last on the right. Left/right
+    // seats differ from the top seat in both height and distance, so it's obvious who is where.
+    // Values are % of the table's own box; anything outside 0-100 sits beyond its rim.
+    function getSeatOffsetPct(index, total) {
+        if (total === 1) return { left: 50, top: -38 };
+        if (total === 2) return [{ left: -40, top: 50 }, { left: 140, top: 50 }][index];
+        if (total === 3) return [{ left: -40, top: 56 }, { left: 50, top: -38 }, { left: 140, top: 56 }][index];
+        const step = Math.PI / (total + 1);
+        const ang = step * (index + 1);
+        return { left: 50 - Math.cos(ang) * 90, top: 50 - Math.sin(ang) * 80 };
+    }
+    const seatPos = {};
     opponents.forEach((player, index) => {
-        seatAngles[player.id] = angleStep * (index + 1);
+        seatPos[player.id] = getSeatOffsetPct(index, opponents.length);
     });
 
     // 1. Center Board (Played Cards) - each card sits toward the side of the table its player occupies
-    gameState.board.forEach((card, index) => {
+    gameState.board.forEach((card) => {
         const cardEl = createCardElement(card, false);
         cardEl.classList.add('played-card');
-        const rotation = (Math.random() * 16 - 8);
+        const rotation = (Math.random() * 12 - 6);
         cardEl.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
 
         let leftPct = 50, topPct = 50;
         if (card.playedBy === myPeerId) {
-            leftPct = 50; topPct = 76;
-        } else if (seatAngles[card.playedBy] !== undefined) {
-            const angle = seatAngles[card.playedBy];
-            leftPct = 50 - Math.cos(angle) * 27;
-            topPct = 50 - Math.sin(angle) * 27;
+            leftPct = 50; topPct = 78;
+        } else if (seatPos[card.playedBy]) {
+            const dx = seatPos[card.playedBy].left - 50;
+            const dy = seatPos[card.playedBy].top - 50;
+            const len = Math.hypot(dx, dy) || 1;
+            leftPct = 50 + (dx / len) * 30;
+            topPct = 50 + (dy / len) * 30;
         }
         cardEl.style.left = `${leftPct}%`;
         cardEl.style.top = `${topPct}%`;
         boardArea.appendChild(cardEl);
     });
 
-    // 2. Opponents - positioned in a circle around the table, each seat gently rotated
-    // toward the middle so it reads like people actually sitting around it.
-    const crowded = opponents.length >= 2;
-    const SEAT_RADIUS = 66; // % of the table's own box - just outside the felt's rim
+    // 2. Opponents - no rotation. Desktop: seated around the table with a clear gap.
+    // Mobile: a compact row of turn-ordered chips above the table, without card visuals.
     opponents.forEach((player, index) => {
         const oppDiv = document.createElement('div');
-        oppDiv.className = 'opponent-container' + (crowded ? ' compact' : '');
+        oppDiv.className = 'opponent-container' + (isMobile ? ' compact' : '');
 
         const isActiveTurn = activeTurnPlayer && activeTurnPlayer.id === player.id;
         const showFoldState = (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
@@ -197,14 +208,12 @@ function renderGameBoard() {
         if (isActiveTurn) oppDiv.classList.add('is-active-turn');
         if (isFolded) oppDiv.classList.add('is-folded');
 
-        const angle = seatAngles[player.id];
-        const leftPct = 50 - Math.cos(angle) * SEAT_RADIUS;
-        const topPct = 50 - Math.sin(angle) * SEAT_RADIUS;
-        const angleDeg = angle * 180 / Math.PI;
-        const tilt = Math.max(-18, Math.min(18, (90 - angleDeg) * 0.35));
-        oppDiv.style.left = `${leftPct}%`;
-        oppDiv.style.top = `${topPct}%`;
-        oppDiv.style.transform = `translate(-50%, -50%) rotate(${tilt}deg)`;
+        if (!isMobile) {
+            const pos = seatPos[player.id];
+            oppDiv.style.left = `${pos.left}%`;
+            oppDiv.style.top = `${pos.top}%`;
+            oppDiv.style.transform = 'translate(-50%, -50%)';
+        }
 
         let teamIcon = player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : '');
         const isPlayerHost = player.name.includes('(Host)');
@@ -212,7 +221,9 @@ function renderGameBoard() {
 
         let pileHtml = '';
         if (player.wonCards && player.wonCards.length > 0) {
-            pileHtml = `
+            pileHtml = isMobile
+                ? `<div class="won-pile-btn" title="Click to view won cards"><span>${player.wonCards.length} won</span></div>`
+                : `
                 <div class="won-pile-btn" title="Click to view won cards">
                     <div class="card face-down mini-card"></div>
                     <span>${player.wonCards.length} won</span>
@@ -220,10 +231,13 @@ function renderGameBoard() {
             `;
         }
 
+        const fanHtml = isMobile ? '' :
+            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length, 5))}</div>`;
+
         oppDiv.innerHTML = `
             <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${isPlayerHost ? '<span title="Host">👑</span> ' : ''}${teamIcon}${cleanName}</span>
             <span class="opp-meta">${player.hand.length} 🃏 &middot; ${player.points} pts</span>
-            <div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length, 5))}</div>
+            ${fanHtml}
             ${isFolded ? '<span class="fold-tag">FOLDED</span>' : ''}
             ${pileHtml}
         `;
@@ -252,11 +266,10 @@ function renderGameBoard() {
             if (gameState.originalCalledCards && gameState.originalCalledCards.length > 0) {
                 const partnerHtml = gameState.originalCalledCards.map(c => {
                     const suit = c.slice(-1);
-                    const rank = c.slice(0, -1);
                     const cls = (suit === '♥' || suit === '♦') ? 'red' : 'black';
-                    return `<span class="partner-card-chip ${cls}"><span class="pcc-rank">${rank}</span><span class="pcc-suit">${suit}</span></span>`;
-                }).join('');
-                trumpHtml += `<span class="partner-label">Partner:</span><span class="partner-cards-row">${partnerHtml}</span>`;
+                    return `<b class="${cls}">${c}</b>`;
+                }).join(', ');
+                trumpHtml += ` &middot; Partner: ${partnerHtml}`;
             }
             document.getElementById('trump-info').innerHTML = trumpHtml;
         }
@@ -640,3 +653,13 @@ document.getElementById('saveBtn')?.addEventListener('click', saveGame);
 document.getElementById('loadInput')?.addEventListener('change', loadGame);
 document.getElementById('hostSaveBtn')?.addEventListener('click', () => { saveGame(); closeHostMenu(); });
 document.getElementById('hostLoadInput')?.addEventListener('change', (e) => { loadGame(e); closeHostMenu(); });
+
+// Switch between the desktop seating layout and the mobile row when the viewport crosses the breakpoint.
+let lastIsMobile = window.innerWidth <= 850;
+window.addEventListener('resize', () => {
+    const nowMobile = window.innerWidth <= 640;
+    if (nowMobile !== lastIsMobile) {
+        lastIsMobile = nowMobile;
+        if (gameState.phase !== 'LOBBY' && document.getElementById('view-game').style.display !== 'none') renderGameBoard();
+    }
+});

@@ -3,114 +3,150 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kalli Tilli</title>
+    <title>Kaali Tirri</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
-
     <!-- VIEW 1: Landing Page -->
-    <div id="view-landing" class="view-container" style="display: flex; flex-direction: column; gap: 15px; align-items: center; margin-top: 50px;">
-        <h1 style="color: white;">Kalli Tilli</h1>
-        <div style="background: rgba(0,0,0,0.5); padding: 20px; border-radius: 8px; display: flex; flex-direction: column; gap: 10px;">
-            <input type="text" id="playerName" placeholder="Your Name (Required)">
-            <button id="hostBtn" style="background: #4CAF50; color: white;">Create Room</button>
-            <hr style="width: 100%;">
-            <input type="text" id="joinId" placeholder="Enter Room ID">
-            <button id="joinBtn" style="background: #2196F3; color: white;">Join Room</button>
+    <div id="view-landing" class="view-container">
+        <h1 class="brand">Kaali Tirri</h1>
+        <div class="brand-suit-row">♠ ♥ ♦ ♣</div>
+        <div class="landing-card">
+            <input type="text" id="playerName" placeholder="Your name">
+            <button id="hostBtn" class="btn-success">Create Room</button>
+            <div class="divider-row"><hr><span>OR</span><hr></div>
+            <input type="text" id="joinId" placeholder="Room ID">
+            <button id="joinBtn" class="btn-info">Join Room</button>
         </div>
     </div>
 
-    <!-- VIEW 2: Waiting Room (Lobby) -->
-    <div id="view-lobby" class="view-container" style="display: none; flex-direction: column; align-items: center; width: 100%; max-width: 500px; margin-top: 50px; background: rgba(0,0,0,0.5); padding: 20px; border-radius: 8px;">
-        <h2 style="color: white;">Waiting Room</h2>
-        <div id="roomIdDisplay" style="margin-bottom: 15px; color: yellow; font-size: 18px; font-weight: bold;"></div>
-        
-        <div id="lobby-players" style="width: 100%; color: white; display: flex; flex-direction: column; gap: 10px;"></div> 
-        
-        <button id="startGameBtn" style="display: none; background: #4CAF50; color: white; margin-top: 20px; width: 100%;">Start Game</button>
+    <!-- VIEW 2: Waiting Room -->
+    <div id="view-lobby" class="view-container" style="display: none;">
+        <h2>Waiting Room</h2>
+        <div id="roomIdDisplay" class="room-id-chip"></div>
 
-        <div style="margin-top: 15px; display: flex; gap: 10px; justify-content: center;">
-            <button id="saveBtn" style="background: #607d8b; color: white;">Download Save</button>
-            <label for="loadInput" style="background: #795548; color: white; padding: 10px 15px; border-radius: 5px; cursor: pointer;">
-                Load Save
-            </label>
+        <div id="lobby-players" class="lobby-players"></div>
+
+        <button id="startGameBtn" class="btn-success" style="display: none;">Start Game</button>
+
+        <div class="lobby-utility-row">
+            <button id="saveBtn" class="btn-wood">Download Save</button>
+            <label for="loadInput" class="btn-wood">Load Save</label>
             <input type="file" id="loadInput" accept=".json" style="display: none;">
         </div>
     </div>
 
     <!-- VIEW 3: Active Game Board -->
-    <div id="view-game" class="view-container" style="display: none; width: 100%; max-width: 900px; flex-direction: column; align-items: center;">
-        
-        <!-- Game Controls & Info -->
-        <div id="controls" style="width: 100%;">
-            <div id="phase-display" style="color: white; font-weight: bold; margin-right: auto; width: 100%; text-align: center; margin-bottom: 10px;">Phase: LOBBY</div>
-            
-            <div id="game-info" style="display: none; width: 100%; color: white; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px; margin-bottom: 10px; text-align: center;">
-                <span id="bid-info"></span><br>
-                <span id="trump-info"></span>
+    <div id="view-game" class="view-container" style="display: none;">
+
+        <!-- Top Header Controls -->
+        <div id="game-header">
+            <div id="phase-display" class="chip">Phase: <span class="phase-label">Lobby</span></div>
+
+            <div id="game-info" class="chip">
+                <span id="bid-info"></span><span id="trump-info"></span>
             </div>
 
-            <!-- Bidding Phase Input -->
-            <div id="bidding-panel" style="display: none; gap: 5px; justify-content: center; margin-bottom: 10px;">
-                <input type="number" id="bidAmount" placeholder="Raise Bid" min="80" step="5">
-                <button id="submitBidBtn" style="background-color: #4CAF50; color: white;">Raise</button>
-                <button id="foldBtn" style="background-color: #f44336; color: white;">Fold</button>
+            <div id="host-controls-wrapper">
+                <button id="hostMenuToggle" aria-label="Host menu">⚙️</button>
+                <div id="host-dropdown">
+                    <button id="hostPauseBtn" class="btn-info">⏸ Pause Game</button>
+                    <button id="hostReshuffleBtn" class="btn-info">Re-Deal</button>
+                    <button id="hostSaveBtn" class="btn-wood">Download Save</button>
+                    <label for="hostLoadInput" class="btn-wood">Load Save</label>
+                    <input type="file" id="hostLoadInput" accept=".json" style="display: none;">
+                    <button id="hostBackToLobbyBtn" class="btn-danger">Return to Lobby</button>
+                </div>
             </div>
-
-            <!-- Trump Selection Input -->
-            <div id="trump-panel" style="display: none; flex-direction: column; gap: 10px; background: rgba(0,0,0,0.6); padding: 15px; border-radius: 8px; margin-bottom: 10px;">
-                <div style="color: white; font-weight: bold;">Choose Cart (Trump):</div>
-                <select id="trumpSuitSelect" style="padding: 5px; font-size: 16px;">
-                    <option value="♠">♠ Spades</option>
-                    <option value="♥">♥ Hearts</option>
-                    <option value="♦">♦ Diamonds</option>
-                    <option value="♣">♣ Clubs</option>
-                </select>
-                <div style="color: white; font-weight: bold; margin-top: 10px;">Choose Team Cards:</div>
-                <div id="team-cards-container" style="display: flex; flex-direction: column; gap: 5px;"></div>
-                <button id="setTrumpBtn" style="background-color: #2196F3; color: white; margin-top: 10px;">Confirm & Start</button>
-            </div>
-            
-            <button id="backToLobbyBtn" style="display: none; background: #f44336; color: white; margin-bottom: 10px;">Return to Lobby</button>
         </div>
 
-        <!-- Poker Table Layout -->
-        <div id="poker-table">
-            <div id="opponents-area"></div>
-            <div id="center-board"></div>
+        <!-- Countdown / status messages. -->
+        <div id="status-stack">
+            <div id="timer-bar-wrap">
+                <span id="timer-bar-label"></span>
+                <div id="timer-bar-track"><div id="timer-bar-fill"></div></div>
+                <span id="timer-bar-text">30s</span>
+            </div>
+            <div id="fold-banner" class="chip" style="display: none;"></div>
+        </div>
+
+        <!-- ACTION OVERLAY -->
+        <div id="action-overlay">
+
+            <div id="bidding-panel" class="action-panel">
+                <h3>Place Your Bid</h3>
+                <p class="hint">Multiples of 5 only, 130&ndash;250 points.</p>
+                <input type="number" id="bidAmount" min="130" max="250" step="5">
+                <div class="btn-row">
+                    <button id="submitBidBtn" class="btn-success">Bid</button>
+                    <button id="foldBtn" class="btn-danger">Fold</button>
+                </div>
+            </div>
+
+            <div id="trump-panel" class="action-panel">
+                <h3>Choose Trump &amp; Team</h3>
+                <div class="panel-label">Trump suit</div>
+                <select id="trumpSuitSelect">
+                    <option value="♠">♠ Spades</option><option value="♥">♥ Hearts</option><option value="♦">♦ Diamonds</option><option value="♣">♣ Clubs</option>
+                </select>
+                <div class="panel-label">Partner card(s)</div>
+                <div id="team-cards-container"></div>
+                <button id="setTrumpBtn" class="btn-info">Start Game</button>
+            </div>
+        </div>
+
+        <!-- PAUSE OVERLAY -->
+        <div id="pause-overlay" style="display: none;">
+            <div class="pause-card">
+                <h2>⏸ Game Paused</h2>
+                <p>The host has paused the game. Sit tight.</p>
+                <button id="resumeFromOverlayBtn" class="btn-success" style="display: none;">Resume Game</button>
+            </div>
+        </div>
+
+        <div class="table-zone">
+
+            <div id="table-wrapper">
+                <div id="center-board"></div>
+                <div id="opponents-area"></div>
+            </div>
+
             <div id="my-area"></div>
         </div>
 
-        <!-- Scorecard Modal -->
-        <div id="scorecard-modal" style="display: none; position: absolute; top: 10%; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 20px; border-radius: 10px; border: 2px solid #ffd700; z-index: 1000; width: 80%; max-width: 500px; text-align: center; box-shadow: 0 0 20px rgba(0,0,0,0.8);">
-            <h2 id="score-title">Round Over</h2>
-            <hr>
-            <div style="display: flex; justify-content: space-between; margin: 10px 0;">
-                <div style="text-align: left; width: 45%;">
-                    <h3 style="color: #ff9800;">🔥 Bidder Team</h3>
-                    <div id="bidder-stats"></div>
-                    <br>
-                    <strong>Total: <span id="bidder-total"></span></strong><br>
-                    <small>Target: <span id="bid-target"></span></small>
+        <!-- Modals -->
+        <div id="scorecard-modal" class="modal-card" style="display: none;">
+            <h2 id="score-title">Round Over</h2><hr>
+            <div class="score-columns">
+                <div>
+                    <h3 class="team-bidder">🔥 Bidder Team</h3><div id="bidder-stats"></div><br>
+                    <strong>Total: <span id="bidder-total"></span></strong><br><small>Target: <span id="bid-target"></span></small>
                 </div>
-                <div style="border-left: 1px solid gray;"></div>
-                <div style="text-align: left; width: 45%; padding-left: 10px;">
-                    <h3 style="color: #03a9f4;">🛡️ Defender Team</h3>
-                    <div id="defender-stats"></div>
-                    <br>
+                <div class="col-divider"></div>
+                <div>
+                    <h3 class="team-defender">🛡️ Defender Team</h3><div id="defender-stats"></div><br>
                     <strong>Total: <span id="defender-total"></span></strong>
                 </div>
+            </div><hr>
+            <button id="modalBackToLobbyBtn" class="btn-danger">Return to Lobby</button>
+        </div>
+
+        <div id="won-cards-modal-backdrop" style="display: none;"></div>
+        <div id="won-cards-modal" style="display: none;">
+            <div class="won-cards-header">
+                <h3 id="won-cards-title">Won Cards</h3>
+                <button id="closeWonCardsBtn" class="btn-danger">✕ Close</button>
             </div>
-            <hr>
-            <!-- Moved the back to lobby button into the modal -->
-            <button id="modalBackToLobbyBtn" style="display: none; background: #f44336; color: white; width: 100%; margin-top: 10px;">Return to Lobby</button>
+            <div id="won-cards-list"></div>
         </div>
     </div>
 
-    <!-- Scripts must load in this strict order -->
+    <script src="network.js"></script>
     <script src="game.js"></script>
     <script src="ui.js"></script>
-    <script src="network.js"></script>
 </body>
 </html>

@@ -13,7 +13,11 @@ function getCardRank(card) {
     return values.indexOf(card.value);
 }
 
-// --- State Structure ---
+const MIN_BID = 130;
+const MAX_BID = 250;
+const BIDDING_TIME_MS = 30000;
+const TURN_TIME_MS = 30000;
+
 let gameState = {
     phase: 'LOBBY',       // LOBBY, BIDDING, TRUMP_SELECTION, PLAYING, TRICK_EVALUATION, GAMEOVER
     deck: [],
@@ -24,10 +28,15 @@ let gameState = {
     highestBid: { playerId: null, amount: 0, playerName: "" },
     trumpSuit: null,      
     calledCards: [],
-    spectators: []
+    originalCalledCards: [],
+    spectators: [],
+    biddingDeadline: null,
+    turnDeadline: null,
+    isPaused: false,
+    pausedRemaining: null
 };
-let gameStats = {}; 
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
+let gameStats = {}; 
 
 function generateDeck() {
     let deck = [];
@@ -64,6 +73,7 @@ function isCardPlayable(playerId, card) {
 }
 
 function handlePlayCard(playerId, playedCard) {
+    if (gameState.isPaused) return;
     if (!isCardPlayable(playerId, playedCard)) return;
 
     const playerIndex = gameState.players.findIndex(p => p.id === playerId);
@@ -76,22 +86,30 @@ function handlePlayCard(playerId, playedCard) {
         card.playedBy = playerId; 
         gameState.board.push(card);
         
-        // Team Reveal Logic
         const cardStr = `${card.value}${card.suit}`;
         if (gameState.calledCards.includes(cardStr)) {
             player.team = 'BIDDER_TEAM';
             gameState.calledCards = gameState.calledCards.filter(c => c !== cardStr);
+
+            if (gameState.calledCards.length === 0) {
+                gameState.players.forEach(p => {
+                    if (p.team === 'UNKNOWN') {
+                        p.team = 'DEFENDER_TEAM';
+                    }
+                });
+            }
         }
 
         if (gameState.board.length === gameState.players.length) {
-            // Lock board for evaluation
             gameState.phase = 'TRICK_EVALUATION';
+            gameState.turnDeadline = null;
             setTimeout(() => {
                 evaluateTrick();
-                broadcastState(); // Broadcast after evaluation finishes
+                broadcastState();
             }, 2000);
         } else {
             gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
+            resetTurnTimer();
         }
     }
 }
@@ -124,9 +142,11 @@ function evaluateTrick() {
     gameState.board = []; 
 
     if (gameState.players[0].hand.length === 0) {
+        gameState.turnDeadline = null;
         evaluateRoundEnd();
     } else {
         gameState.phase = 'PLAYING';
+        resetTurnTimer();
     }
 }
 
@@ -144,11 +164,9 @@ function evaluateRoundEnd() {
 
     const bidderWon = bTotal >= gameState.highestBid.amount;
 
-    // Record stats permanently by player name without affecting gameplay
     gameState.players.forEach(p => {
-        if(p.name.includes("(Spectator)")) return; // Skip spectators
-        // Strip out temporary host/spectator labels for clean keys
-        const cleanName = p.name.replace(" (Host)", "").replace(" (Spectator)", "").trim();
+        if(p.name.includes("(Spectator)")) return;
+        const cleanName = p.name.replace(" (Host)", "").trim();
         
         if (!gameStats[cleanName]) {
             gameStats[cleanName] = { gamesPlayed: 0, wins: 0, losses: 0 };
@@ -167,49 +185,53 @@ function evaluateRoundEnd() {
 
 function startDeal() {
     let fullDeck = generateDeck();
+    shuffle(fullDeck);
+    shuffle(fullDeck);
 
     const numPlayers = gameState.players.length;
-    if (numPlayers === 0) return;
+    if(numPlayers === 0) return;
 
     const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));
     const totalCardsToDeal = cardsPerPlayer * numPlayers;
     const cardsToRemoveCount = 52 - totalCardsToDeal;
 
-    // 3. Generate the strict eviction order array
-    const evictionValues = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-    const evictionSuits = ['♦', '♣', '♥', '♠']; // Diamonds, Clubs, Hearts, Spades
+    const evictionValues = ['2', '3', '4', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+    const evictionSuits = ['♦', '♣', '♥', '♠'];
     let evictionList = [];
     
     for (let v of evictionValues) {
         for (let s of evictionSuits) {
-            // ALWAYS protect the 3 of Spades
             if (!(v === '3' && s === '♠')) { 
                 evictionList.push(`${v}${s}`);
             }
         }
     }
 
-    // 4. Identify the exact cards to pull from this specific game
     const cardsToEvict = evictionList.slice(0, cardsToRemoveCount);
 
-    // 5. Filter the deck to keep only playable cards, THEN shuffle
     gameState.deck = fullDeck.filter(card => !cardsToEvict.includes(`${card.value}${card.suit}`));
+    shuffle(gameState.deck);
     shuffle(gameState.deck);
     
     gameState.board = [];
     gameState.highestBid = { playerId: null, amount: 0, playerName: "" };
     gameState.trumpSuit = null;
     gameState.calledCards = [];
+    gameState.originalCalledCards = [];
 
     gameState.players.forEach(p => {
         p.hand = [];
         p.wonCards = [];
         p.hasFolded = false;
         p.points = 0;
-        p.team = 'UNKNOWN'; // Reset teams
+        p.team = 'UNKNOWN';
     });
 
-    // 6. Deal the playable deck evenly
+    gameState.biddingDeadline = null;
+    gameState.turnDeadline = null;
+    gameState.isPaused = false;
+    gameState.pausedRemaining = null;
+
     let currentPlayer = 0;
     while (gameState.deck.length > 0) {
         gameState.players[currentPlayer].hand.push(gameState.deck.pop());
@@ -220,20 +242,27 @@ function startDeal() {
 }
 
 function handlePlaceBid(playerId, amount) {
+    if (gameState.isPaused) return { error: "Game is paused." };
     if (gameState.phase !== 'BIDDING') return;
-    const amt = parseInt(amount);
+    const player = gameState.players.find(p => p.id === playerId);
+    if (!player || player.hasFolded) return { error: "You have already folded." };
 
-    if (amt % 5 !== 0) {
-        // We throw an error that the UI can catch, or handle silently
-        return { error: "Bid must be a multiple of 5." }; 
+    const amt = parseInt(amount);
+    if (isNaN(amt) || amt % 5 !== 0) {
+        return { error: "Bid must be a multiple of 5." };
     }
-    
+    if (amt < MIN_BID || amt > MAX_BID) {
+        return { error: `Bid must be between ${MIN_BID} and ${MAX_BID}.` };
+    }
+
     if (amt > gameState.highestBid.amount) {
-        const player = gameState.players.find(p => p.id === playerId);
         gameState.highestBid = { playerId: playerId, amount: amt, playerName: player.name };
+        resetBiddingTimer();
+
         const activePlayers = gameState.players.filter(p => !p.hasFolded);
-        if (activePlayers.length === 1) {
+        if (activePlayers.length === 1 || amt === MAX_BID) {
             gameState.phase = 'TRUMP_SELECTION';
+            gameState.biddingDeadline = null;
         }
         return { success: true };
     }
@@ -241,6 +270,7 @@ function handlePlaceBid(playerId, amount) {
 }
 
 function handleFold(playerId) {
+    if (gameState.isPaused) return;
     if (gameState.phase !== 'BIDDING') return;
     if (gameState.highestBid.playerId === playerId) return;
 
@@ -250,24 +280,122 @@ function handleFold(playerId) {
     const activePlayers = gameState.players.filter(p => !p.hasFolded);
 
     if (activePlayers.length === 0) {
-        // Trigger a re-deal automatically
         startDeal(); 
         return;
     }
     if (activePlayers.length === 1 && gameState.highestBid.playerId !== null) {
         gameState.phase = 'TRUMP_SELECTION';
+        gameState.biddingDeadline = null;
     }
 }
 
+function resetBiddingTimer() {
+    gameState.biddingDeadline = Date.now() + BIDDING_TIME_MS;
+}
+
+function checkBiddingTimeout() {
+    if (!isHost) return;
+    if (gameState.isPaused) return;
+    if (gameState.phase !== 'BIDDING' || !gameState.biddingDeadline) return;
+    if (Date.now() < gameState.biddingDeadline) return;
+
+    if (gameState.highestBid.playerId === null) {
+        const active = gameState.players.filter(p => !p.hasFolded);
+        if (active.length === 0) { startDeal(); broadcastState(); return; }
+        const randomPlayer = active[Math.floor(Math.random() * active.length)];
+        gameState.highestBid = { playerId: randomPlayer.id, amount: MIN_BID, playerName: randomPlayer.name };
+        gameState.phase = 'TRUMP_SELECTION';
+    } else {
+        gameState.players.forEach(p => {
+            if (p.id !== gameState.highestBid.playerId && !p.hasFolded) p.hasFolded = true;
+        });
+        gameState.phase = 'TRUMP_SELECTION';
+    }
+
+    gameState.biddingDeadline = null;
+    broadcastState();
+}
+
+setInterval(checkBiddingTimeout, 1000);
+
+function resetTurnTimer() {
+    gameState.turnDeadline = Date.now() + TURN_TIME_MS;
+}
+
+function checkTurnTimeout() {
+    if (!isHost) return;
+    if (gameState.isPaused) return;
+    if (gameState.phase !== 'PLAYING' || !gameState.turnDeadline) return;
+    if (Date.now() < gameState.turnDeadline) return;
+
+    const player = gameState.players[gameState.turnIndex];
+    if (!player) { gameState.turnDeadline = null; return; }
+
+    const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
+    const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
+
+    if (cardToPlay) {
+        handlePlayCard(player.id, cardToPlay);
+    } else {
+        gameState.turnDeadline = null;
+    }
+    broadcastState();
+}
+
+setInterval(checkTurnTimeout, 1000);
+
+function togglePause() {
+    if (!isHost) return;
+
+    if (!gameState.isPaused) {
+        gameState.pausedRemaining = null;
+        if (gameState.biddingDeadline) {
+            gameState.pausedRemaining = gameState.biddingDeadline - Date.now();
+            gameState.biddingDeadline = null;
+        } else if (gameState.turnDeadline) {
+            gameState.pausedRemaining = gameState.turnDeadline - Date.now();
+            gameState.turnDeadline = null;
+        }
+        gameState.isPaused = true;
+    } else {
+        if (gameState.pausedRemaining !== null && gameState.pausedRemaining !== undefined) {
+            const remaining = Math.max(1000, gameState.pausedRemaining);
+            if (gameState.phase === 'BIDDING') {
+                gameState.biddingDeadline = Date.now() + remaining;
+            } else if (gameState.phase === 'PLAYING') {
+                gameState.turnDeadline = Date.now() + remaining;
+            }
+        }
+        gameState.pausedRemaining = null;
+        gameState.isPaused = false;
+    }
+    broadcastState();
+}
+
 function handleSetTrump(playerId, suit, calledCardsArray) {
+    if (gameState.isPaused) return;
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
 
     gameState.trumpSuit = suit;
-    gameState.calledCards = calledCardsArray; 
+    gameState.calledCards = [...calledCardsArray]; 
+    gameState.originalCalledCards = [...calledCardsArray];
     
     const bidderIndex = gameState.players.findIndex(p => p.id === playerId);
     gameState.players[bidderIndex].team = 'BIDDER_TEAM';
     gameState.turnIndex = bidderIndex;
     
     gameState.phase = 'PLAYING';
+    resetTurnTimer();
+}
+
+function getSanitizedStateForClient(clientId) {
+    let safeState = JSON.parse(JSON.stringify(gameState));
+    
+    safeState.players.forEach(p => {
+        if (p.id !== clientId) {
+            const cardCount = p.hand.length;
+            p.hand = new Array(cardCount).fill(null);
+        }
+    });
+    return safeState;
 }

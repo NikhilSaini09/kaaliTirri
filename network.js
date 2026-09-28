@@ -8,7 +8,8 @@ let hostConnection = null;
 function broadcastState() {
     if (!isHost) return;
     Object.values(connections).forEach(conn => {
-        conn.send({ type: 'STATE_UPDATE', state: gameState });
+        const safeState = getSanitizedStateForClient(conn.peer);
+        conn.send({ type: 'STATE_UPDATE', state: safeState });
     });
     renderState(); 
 }
@@ -72,19 +73,17 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         conn.on('data', (data) => {
             if (data.type === 'JOIN_LOBBY') {
                 if (gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
-                    // Add as spectator instead of rejecting
                     gameState.spectators.push({ id: conn.peer, name: data.name + " (Spectator)" });
-                    // Send them a special flag so their UI knows they are spectating
                     conn.send({ type: 'STATE_UPDATE', state: gameState, isSpectator: true });
                 } else {
                     gameState.players.push({ id: conn.peer, name: data.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
                 }
                 broadcastState();
             }
-            if (data.type === 'ACTION_PLAY_CARD') { handlePlayCard(conn.peer, data.card); broadcastState(); }
             if (data.type === 'ACTION_PLACE_BID') { handlePlaceBid(conn.peer, data.amount); broadcastState(); }
             if (data.type === 'ACTION_FOLD') { handleFold(conn.peer); broadcastState(); }
             if (data.type === 'ACTION_SET_TRUMP') { handleSetTrump(conn.peer, data.suit, data.cards); broadcastState(); }
+            if (data.type === 'ACTION_PLAY_CARD') { handlePlayCard(conn.peer, data.card); broadcastState(); }
         });
     });
 });
@@ -113,7 +112,7 @@ document.getElementById('joinBtn').addEventListener('click', () => {
                     username: "openrelayproject", 
                     credential: "openrelayproject" 
                 },
-                {
+                { 
                     urls: "turn:openrelay.metered.ca:443?transport=tcp", 
                     username: "openrelayproject", 
                     credential: "openrelayproject" 
@@ -128,6 +127,7 @@ document.getElementById('joinBtn').addEventListener('click', () => {
         
         hostConnection.on('open', () => {
             hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
+            document.getElementById('roomIdDisplay').textContent = `Room ID: ${roomId}`;
             switchView('view-lobby');
         });
 

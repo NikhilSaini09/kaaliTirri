@@ -13,6 +13,13 @@ function getCardRank(card) {
     return values.indexOf(card.value);
 }
 
+function sortHand(hand) {
+    hand.sort((a, b) => {
+        if (a.suit !== b.suit) return suits.indexOf(a.suit) - suits.indexOf(b.suit);
+        return getCardRank(a) - getCardRank(b);
+    });
+}
+
 const MIN_BID = 130;
 const MAX_BID = 250;
 const BIDDING_TIME_MS = 30000;
@@ -39,12 +46,12 @@ let gameState = {
     pausedRemaining: null
 };
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
-let gameStats = {}; 
+let gameStats = {};
+let playerData = [];
 
 const MIN_PLAYERS = 2;
 
 // ---------- Lobby seat selection (host picks who plays, the rest spectate) ----------
-
 function stripSpectatorTag(name) {
     return name.replace(' (Spectator)', '');
 }
@@ -251,6 +258,8 @@ function evaluateRoundEnd() {
     });
 }
 
+const evictionValues = ['2', '3', '4', '6', '7', '8', '9'];
+const evictionSuits = ['♦', '♣', '♥', '♠'];
 function startDeal() {
     let fullDeck = generateDeck();
     shuffle(fullDeck);
@@ -263,8 +272,6 @@ function startDeal() {
     const totalCardsToDeal = cardsPerPlayer * numPlayers;
     const cardsToRemoveCount = 52 - totalCardsToDeal;
 
-    const evictionValues = ['2', '3', '4', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-    const evictionSuits = ['♦', '♣', '♥', '♠'];
     let evictionList = [];
     
     for (let v of evictionValues) {
@@ -306,6 +313,7 @@ function startDeal() {
         currentPlayer = (currentPlayer + 1) % numPlayers;
     }
 
+    gameState.players.forEach(p => sortHand(p.hand));
     gameState.phase = 'BIDDING';
 }
 
@@ -453,6 +461,12 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
     const bidderIndex = gameState.players.findIndex(p => p.id === playerId);
     gameState.players[bidderIndex].team = 'BIDDER_TEAM';
     gameState.turnIndex = bidderIndex;
+
+    if (allowedCards === 0) {
+        gameState.players.forEach(p => {
+            if (p.id !== playerId) p.team = 'DEFENDER_TEAM';
+        });
+    }
     
     gameState.phase = 'PLAYING';
     resetTurnTimer();

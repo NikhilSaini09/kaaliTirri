@@ -4,7 +4,7 @@ Kaali Tirri is a 100% free, serverless, web-based multiplayer card game built fo
 
 Play directly in your browser: [Play Kaali Tirri](https://nikhilsaini09.github.io/kaaliTirri/)
 
-## Overview & Rules
+## Overview
 
 Kaali Tirri is a trick-taking game with dynamic team alliances and an open bidding system.
 
@@ -17,6 +17,67 @@ Kaali Tirri is a trick-taking game with dynamic team alliances and an open biddi
 * **Bidding:** Players iteratively raise the bid (minimum 130, maximum 250 in multiples of 5) or fold. The highest bidder dictates the game terms.
 * **Trump & Teams:** The highest bidder selects the "Cart" (Trump suit) and calls out "Team Cards" based on the number of players. The players holding these called cards become the secret teammates of the bidder.
 * **The Reveal:** Alliances remain secret until a player physically plays a called team card, exposing them as either a Bidder or Defender.
+
+## Rules of the Game
+
+### Card info
+
+Deck: 52 cards, no jokers;
+
+---
+
+### Points for each card
+
+2, 4, 6, 7, 8, 9 of each of the 4 suits = 0 pts
+
+3 of Spades = 30pts; 3 of other suits = 0 pts
+
+5 of each of the suits = 5 pts
+
+10, J, Q, K, A of each of the suits = 10 pts
+
+Max possible = 30 + 5*4 + 10*5*4 = 250 pts
+
+### Rank of card
+
+---> Increasing order
+2 3 4 5 6 7 8 9 10 J Q K A
+
+---
+
+### Distribution & Auction
+
+All the 52 cards are distributed randomly to each of the players. Cards are distributed equally extras are discarded.
+Now, after they observer their cards they start "# BIDDING", individually. Minimum 130 pts and max 250 pts can be bid.
+Whoever bids highest or 250 first is the "BID_WINNER".
+Anyone can bid, if no one bids in a given time-frame, then a random player is assigned as BID_WINNER with 130 pts.
+BIDDINGA_AMOUNT: the highest bid in the auction.
+
+The BID_WINNER gets to choose two things:
+
+* TRUMP_SUITE
+* PARTNER_CARD (suite + cardnumber)
+
+Player holding the PARTNER_CARD and the BID_WINNER are a team, and the remaining ones in other team. (2 teams)
+Partner is not revealed to any of the players till he plays that card, except the one as he owns the PARTNER_CARD.
+
+---
+
+### Round of Cards
+
+Players (in clockwise order): p1 -> p2 -> p3 -> p4
+
+Once the above settles, game starts with round of cards. In each round, all the players (in clockwise way) gets a chance to play a card from their own deck.
+Each played is visible to everyone the time its played. Say, p1 played "Ace of Spades", then other players get to know it immediately and decide their own card to play accordingly.
+First round is started by the BID_WINNER, and the subsequent rounds are started by the previous ROUND_WINNER
+For each round, the suit of the card that has to be played will be fixed and is decided by the player who begins the round. ::: -> Say p3 is the one starting the round and played "King of Hearts". Now other players can only play the cards of "Hearts" suit from their deck or any card from the "TRUMP_SUITE" for the particular round. If the players do not have cards from these suits, then only they can play the cards from other suits.
+Cards with highest rank wins the round. If card from any TRUMP_SUITE has been played, then the highest rank of the card from the TRUMP_SUITE wins the round.
+ROUND_WINNER gets the points calculated as above mentioned points.
+Score of each players is always visible to all players.
+All the cards played are then discarded and cannot be used in the next rounds.
+Whenever the "PARTNER_CARD" is played, the partner of the BID_WINNER is revealed.In the end of all the rounds, the score gets accumulated team-wise. PARTNER_CARD holder + BID_WINNER is Bidder TEAM, and other players in Defender TEAM.
+If Bidder TEAM score is greater than or equals to the BIDDING_AMOUNT, they wins else the Defender TEAM wins.
+Each player gets 30 sec to play their card, else the system automatically plays
 
 ## Features
 

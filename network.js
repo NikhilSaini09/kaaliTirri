@@ -107,7 +107,22 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         conn.on('data', (data) => {
             if (data.type === 'LEAVE') { markDisconnected(conn.peer); return; }
             if (data.type === 'JOIN_LOBBY') {
-                if (gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
+                const normName = data.name.trim();
+
+                const dcIndex = (gameState.disconnectedIds || []).findIndex(dcId => {
+                    const pl = gameState.players.find(p => p.id === dcId);
+                    return pl && pl.name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '').trim() === normName;
+                });
+
+                if (dcIndex !== -1 && (gameState.phase !== 'LOBBY')) {
+                    const oldId = gameState.disconnectedIds.splice(dcIndex, 1)[0];
+                    const player = gameState.players.find(p => p.id === oldId);
+                    if (player) {
+                        player.id = conn.peer;
+                        gameState.board.forEach(c => { if (c.playedBy === oldId) c.playedBy = conn.peer; });
+                        if (gameState.highestBid.playerId === oldId) gameState.highestBid.playerId = conn.peer;
+                    }
+                } else if (gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
                     gameState.spectators.push({ id: conn.peer, name: data.name + " (Spectator)" });
                 } else {
                     gameState.players.push({ id: conn.peer, name: data.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });

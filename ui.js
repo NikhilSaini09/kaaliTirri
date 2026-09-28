@@ -540,6 +540,11 @@ function requestPlayCard(card) {
     else if (hostConnection) hostConnection.send({ type: 'ACTION_PLAY_CARD', card: card });
 }
 
+function normalizeName(name) {
+    if (!name) return "";
+    return name.replace(/\s*\((Host\vert{}H\vert{}Spectator\vert{}S)\)\s*/gi, '').trim();
+}
+
 function saveGame() {
     const payload = {
         gameState: gameState,
@@ -551,7 +556,7 @@ function saveGame() {
 
     const linkElement = document.createElement('a');
     linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', `kalli_tilli_backup_${Date.now()}.json`);
+    linkElement.setAttribute('download', `kaali_tirri_save_${Date.now()}.json`);
     linkElement.click();
 }
 
@@ -570,27 +575,95 @@ function loadGame(event) {
             const parsed = JSON.parse(e.target.result);
 
             if (parsed.gameState) {
-                const currentConnections = gameState.players.map(p => ({ id: p.id, name: p.name }));
+                let allCurrentUsers = [];
+                gameState.players.forEach(p => allCurrentUsers.push({ id: p.id, name: p.name }));
+                (gameState.spectators || []).forEach(s => allCurrentUsers.push({ id: s.id, name: s.name }));
+                
+                let uniqueUsers = Array.from(new Map(allCurrentUsers.map(item => [item.id, item])).values());
+                let currentPool = [...uniqueUsers];
+                let leftoverSpectators = [];
+                let idMap = {};
+                
+                let newPlayers = new Array(parsed.gameState.players.length).fill(null);
+
+                // PASS 1: Robust normalized name matching
+                parsed.gameState.players.forEach((savedPlayer, index) => {
+                    const matchIndex = currentPool.findIndex(p => normalizeName(p.name) === normalizeName(savedPlayer.name));
+                    if (matchIndex !== -1) {
+                        const matchedConn = currentPool.splice(matchIndex, 1)[0];
+                        idMap[savedPlayer.id] = matchedConn.id;
+                        savedPlayer.id = matchedConn.id;
+                        newPlayers[index] = savedPlayer;
+                    }
+                });
+
+                // PASS 2: Map unassigned seats to remaining people in room
+                parsed.gameState.players.forEach((savedPlayer, index) => {
+                    if (!newPlayers[index]) {
+                        if (currentPool.length > 0) {
+                            const matchedConn = currentPool.shift();
+                            idMap[savedPlayer.id] = matchedConn.id;
+                            savedPlayer.id = matchedConn.id;
+                            savedPlayer.name = matchedConn.name;
+                            newPlayers[index] = savedPlayer;
+                        }
+                    }
+                });
+
+                newPlayers = newPlayers.filter(p => p !== null);
+
+                // PASS 3: Remaining connected users become spectators
+                currentPool.forEach(conn => {
+                    leftoverSpectators.push({ id: conn.id, name: conn.name + " (Spectator)" });
+                });
+
+                parsed.gameState.players = newPlayers;
+                parsed.gameState.spectators = leftoverSpectators;
+
+                if (parsed.gameState.lobbyOrder) {
+                    let newLobbyOrder = [];
+                    parsed.gameState.lobbyOrder.forEach(oldId => {
+                        if (idMap[oldId]) newLobbyOrder.push(idMap[oldId]);
+                    });
+                    leftoverSpectators.forEach(s => newLobbyOrder.push(s.id));
+                    parsed.gameState.lobbyOrder = newLobbyOrder;
+                }
+
+                if (parsed.gameState.highestBid && idMap[parsed.gameState.highestBid.playerId]) {
+                    parsed.gameState.highestBid.playerId = idMap[parsed.gameState.highestBid.playerId];
+                    const bidder = newPlayers.find(p => p.id === parsed.gameState.highestBid.playerId);
+                    if (bidder) parsed.gameState.highestBid.playerName = bidder.name;
+                } else if (parsed.gameState.highestBid) {
+                    parsed.gameState.highestBid.playerId = null;
+                }
+
+                parsed.gameState.board.forEach(card => {
+                    if (idMap[card.playedBy]) card.playedBy = idMap[card.playedBy];
+                });
+
+                if (parsed.gameState.turnIndex >= newPlayers.length) {
+                    parsed.gameState.turnIndex = 0; 
+                }
+
+                parsed.gameState.isPaused = true;
+                parsed.gameState.pausedRemaining = 30000;
+                parsed.gameState.biddingDeadline = null;
+                parsed.gameState.turnDeadline = null;
 
                 gameState = parsed.gameState;
                 gameStats = parsed.gameStats || {};
 
-                currentConnections.forEach((conn, index) => {
-                    if (gameState.players[index]) {
-                        gameState.players[index].id = conn.id;
-                    }
-                });
-
                 broadcastState();
-                alert("Game state and stats restored.");
             } else {
                 throw new Error("Invalid structure");
             }
         } catch(err) {
             alert("Failed to parse the save file.");
+            console.error(err);
         }
     };
     reader.readAsText(file);
+    event.target.value = '';
 }
 
 function openWonCardsModal(player) {

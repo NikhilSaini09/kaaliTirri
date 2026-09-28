@@ -598,8 +598,6 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 .opponent-container.dense { font-size: 14px; padding: 8px 14px; min-width: 96px; gap: 3px; }
 .opponent-container.dense .opp-meta { font-size: 12px; }
-.opponent-container.dense .hand-fan { height: 30px; }
-.opponent-container.dense .hand-fan-card { margin-left: -13px; }
 
 .opponent-container.compact {
     padding: 5px 10px;
@@ -616,10 +614,25 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     align-items: flex-end;
     margin-top: 2px;
 }
-.hand-fan-card {
-    margin-left: -16px;
+.opponent-container .hand-fan-card {
+    width: 22px !important;
+    height: 32px !important;
+    min-width: 22px;
+    min-height: 32px;
+    margin-left: -12px;
 }
-.hand-fan-card:first-child { margin-left: 0; }
+.opponent-container .hand-fan { height: 32px; }
+.opponent-container.dense .hand-fan { height: 24px; }
+.opponent-container.dense .hand-fan-card {
+    width: 16px !important;
+    height: 24px !important;
+    min-width: 16px;
+    min-height: 24px;
+    margin-left: -9px;
+}
+.opponent-container.dense .won-pile-btn { padding: 2px 8px; font-size: 11px; }
+.opponent-container.dense .won-pile-btn .mini-card { width: 14px !important; height: 20px !important; min-width: 14px; min-height: 20px; }
+.opponent-container .hand-fan-card:first-child { margin-left: 0; }
 
 .is-active-turn {
     border-color: var(--brass-300) !important;
@@ -719,7 +732,25 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 .black { color: #000; }
 
 .dense-table .played-card { width: 42px; height: 60px; }
-.my-status-row { display: contents; }
+.my-status-row {
+    display: flex;
+    width: 100%;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 36px; /* reserved so the table doesn't jump when the badge/pile appear */
+    margin-bottom: 10px;
+}
+.my-status-row .your-turn-badge,
+.my-status-row .my-won-pile {
+    position: static;
+    transform: none;
+    margin: 0;
+    top: auto;
+    right: auto;
+}
+.my-status-row .my-won-pile:hover { transform: scale(1.04); }
 
 .played-card {
     position: absolute;
@@ -879,10 +910,9 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
     .pause-card { padding: 26px 24px; }
 
-    .my-status-row { display: flex; width: 100%; justify-content: center; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+    .my-status-row { margin-bottom: 8px; min-height: 0; }
     .my-status-row:empty { display: none; }
-    .my-status-row .your-turn-badge, .my-status-row .my-won-pile { position: static; transform: none; margin: 0; top: auto; right: auto; }
-    .my-won-pile { font-size: 11px; padding: 5px 10px; }
+        .my-won-pile { font-size: 11px; padding: 5px 10px; }
     .your-turn-badge { font-size: 11px; padding: 5px 11px; }
     .opponent-container.compact { min-width: 58px; }
     .dense-table .played-card { width: 30px; height: 44px; font-size: 11px; }

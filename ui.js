@@ -49,7 +49,7 @@ function renderState() {
 }
 
 function renderLobby() {
-    stopTimerBarLoop(); // otherwise a countdown started mid-hand keeps ticking (and beeping) in the background
+    stopTimerBarLoop();
     const lobbyDiv = document.getElementById('lobby-players');
     lobbyDiv.innerHTML = '';
 
@@ -125,7 +125,7 @@ function renderLobby() {
             controls.appendChild(down);
 
             const isEligibleForHost = member.id !== myPeerId && !isGone &&
-                gameState.players.some(p => p.id === member.id); // active players only, not spectators
+                gameState.players.some(p => p.id === member.id);
             if (isEligibleForHost) {
                 const makeHost = document.createElement('button');
                 makeHost.className = 'btn-wood';
@@ -218,9 +218,6 @@ function cleanPlayerName(name) {
     return name.replace(' (Host)', ' (H)').replace(' (Spectator)', ' (S)');
 }
 
-// Player names are chosen by whoever joins the room and get interpolated into innerHTML
-// in a few places below - escape them first so a name like "<img src=x onerror=...>"
-// can't run script in everyone else's browser.
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str == null ? '' : String(str);
@@ -234,12 +231,8 @@ let bidAmountEditedByUser = false;
 let hasAutoFocusedBidOnce = false;
 let trumpPanelWasOpen = false;
 
-// Full teardown-and-rebuild every render (which used to happen on literally every state
-// broadcast - someone else bidding, folding, anything) retriggers every element's CSS
-// entrance animation and drops hover/transition state, which reads as constant "flicker".
-// These track what was actually rendered last time so unchanged parts can be left alone.
 let lastHandIds = null;
-let boardCardCache = {}; // card.id -> { el, rotation }
+let boardCardCache = {};
 let lastOppSignature = null;
 
 function renderGameBoard() {
@@ -276,8 +269,6 @@ function renderGameBoard() {
     }
     previousTurnPlayerId = activeTurnPlayer ? activeTurnPlayer.id : null;
 
-    // Everyone hears a card land, not just whoever played it - detected from the board
-    // growing rather than from the local click, so it fires the same way for all clients.
     if (gameState.phase === 'PLAYING' || gameState.phase === 'TRICK_EVALUATION') {
         if (previousBoardLength !== null && gameState.board.length > previousBoardLength && !gameState.isPaused) {
             const latestCard = gameState.board[gameState.board.length - 1];
@@ -360,8 +351,7 @@ function renderGameBoard() {
         });
     }
 
-    // 1. Center Board - keyed by card id so a new card fades in on its own without
-    // disturbing (and re-animating) the cards already sitting on the table.
+    // 1. Center Board
     const winningCard = getCurrentWinningCard(gameState.board, gameState.trumpSuit);
     const boardIdsNow = new Set(gameState.board.map(c => c.id));
     Object.keys(boardCardCache).forEach(id => {
@@ -375,7 +365,7 @@ function renderGameBoard() {
         if (!entry) {
             const cardEl = createCardElement(card, false);
             cardEl.classList.add('played-card');
-            const rotation = (Math.random() * 12 - 6); // pick once, keep for the card's lifetime on the table
+            const rotation = (Math.random() * 12 - 6);
             entry = { el: cardEl, rotation };
             boardCardCache[card.id] = entry;
             boardArea.appendChild(cardEl);
@@ -396,8 +386,7 @@ function renderGameBoard() {
         entry.el.style.top = `${topPct}%`;
     });
 
-    // 2. Opponents - skip the rebuild entirely when nothing shown here actually changed
-    // (e.g. someone else placing a bid doesn't touch any opponent's hand/points/turn/fold state).
+    // 2. Opponents
     const oppSignature = JSON.stringify({
         isMobile, dense,
         list: opponents.map(p => [
@@ -434,15 +423,14 @@ function renderGameBoard() {
         if (player.wonCards && player.wonCards.length > 0) {
             pileHtml = isMobile
                 ? `<div class="won-pile-btn" title="Click to view won cards"><span>${player.wonCards.length}</span></div>`
-                : // <div class="card face-down mini-card"></div>
-                ` <div class="won-pile-btn" title="Click to view won cards">
-                    <span>${player.wonCards.length}</span>
-                </div>
-            `;
+                : ` <div class="won-pile-btn" title="Click to view won cards">
+                        <span>${player.wonCards.length}</span>
+                    </div>`
+            ;
         }
 
         const fanHtml = isMobile ? '' :
-            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length / 2 + 1, 5))}</div>`;
+            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(Math.trunc((player.hand.length + 1) / 2), 5))}</div>`;
 
         oppDiv.innerHTML = `
             <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${escapeHtml(cleanName)}</span>
@@ -494,8 +482,6 @@ function renderGameBoard() {
     if (me) {
         const isMyTurn = activeTurnPlayer && activeTurnPlayer.id === me.id;
 
-        // Status row (turn badge / won-pile) is cheap to rebuild and must stay first in DOM
-        // order - only the card wrappers below get the more careful diffing.
         const oldStatusRow = myArea.querySelector('.my-status-row');
         if (oldStatusRow) oldStatusRow.remove();
         const statusRow = document.createElement('div');
@@ -509,9 +495,6 @@ function renderGameBoard() {
             statusRow.appendChild(badge);
         }
 
-        // Only rebuild the hand when the actual set of cards changed (you played one, or a
-        // fresh deal) - someone else bidding/folding/playing shouldn't touch your cards at
-        // all, which is what was making them visibly flash on every unrelated action before.
         const currentHandIds = me.hand.map(c => c.id).join('|');
         if (currentHandIds !== lastHandIds) {
             myArea.querySelectorAll('.my-card-wrapper').forEach(el => el.remove());
@@ -532,9 +515,6 @@ function renderGameBoard() {
             lastHandIds = currentHandIds;
         }
 
-        // Playability (and sizing) can change even when the cards themselves didn't - e.g.
-        // the led suit gets set by whoever plays first - so this always re-applies, but it's
-        // just a style/class toggle on the existing elements, never a rebuild.
         const cardWrappers = myArea.querySelectorAll('.my-card-wrapper');
         cardWrappers.forEach(wrapper => {
             const card = me.hand.find(c => c.id === wrapper.dataset.cardId);
@@ -574,7 +554,6 @@ function renderGameBoard() {
             const myPileDiv = document.createElement('div');
             myPileDiv.className = 'my-won-pile';
             myPileDiv.title = "Click to view your won cards";
-                 // <div class="card face-down mini-card"></div>
             myPileDiv.innerHTML = `
                 <span>${me.wonCards.length} (${me.points} pts)</span>
             `;
@@ -597,7 +576,6 @@ function renderGameBoard() {
             showOverlay = true;
             biddingPanel.style.display = 'flex';
 
-            // setTimeout(() => document.getElementById('bidAmount').focus(), 100);
             const minBid = Math.max(MIN_BID, gameState.highestBid.amount + 5);
             const bidInput = document.getElementById('bidAmount');
             bidInput.min = minBid;
@@ -605,9 +583,6 @@ function renderGameBoard() {
             bidInput.placeholder = `${minBid}\u2013${MAX_BID}`;
 
             if (!bidPanelWasOpen) {
-                // A fresh chance to bid (panel just appeared) - give it a sensible default.
-                // Re-broadcasts while it's already open (someone else bidding/folding)
-                // must NOT touch the value again, or typing gets wiped out mid-keystroke.
                 bidInput.value = minBid;
                 bidAmountEditedByUser = false;
                 if (!hasAutoFocusedBidOnce && window.innerWidth > 860) {
@@ -626,9 +601,6 @@ function renderGameBoard() {
                 showOverlay = true;
                 trumpPanel.style.display = 'flex';
 
-                // Only build the partner-card selects once per turn - an unrelated broadcast
-                // (e.g. a spectator joining mid-selection) used to wipe out whatever the
-                // bidder had already picked by rebuilding these every single render.
                 if (!trumpPanelWasOpen) {
                     teamCardsContainer.innerHTML = '';
                     let allowedCards = Math.floor((gameState.players.length - 2) / 2);
@@ -662,8 +634,6 @@ function renderGameBoard() {
         actionOverlay.style.display = showOverlay ? 'flex' : 'none';
         actionOverlay.classList.toggle('no-dim', gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
     } else {
-        // Spectator (or excluded from this game) - nothing above ran, so clear out anything
-        // left behind from when this browser last had a hand of its own.
         if (lastHandIds !== null) {
             myArea.innerHTML = '';
             lastHandIds = null;
@@ -692,14 +662,6 @@ function renderGameBoard() {
                 dTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${p.points} pts</b>${statLine}</div>`;
                 dTotal += p.points;
             }
-
-            // if (p.team === 'BIDDER_TEAM') {
-            //     bTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
-            //     bTotal += p.points;
-            // } else {
-            //     dTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
-            //     dTotal += p.points;
-            // }
         });
 
         document.getElementById('bidder-stats').innerHTML = bTeamHtml;
@@ -866,9 +828,6 @@ function loadGame(event) {
                 parsed.gameState.turnDeadline = null;
                 parsed.gameState.trumpSelectionDeadline = null;
 
-                // These all refer to peer ids from the saved session, none of which mean
-                // anything now - leaving them in would show phantom "disconnected" rows or
-                // wrongly pre-exclude a freshly-matched seat in the lobby.
                 parsed.gameState.excludedIds = [];
                 parsed.gameState.disconnectedIds = [];
                 parsed.gameState.disconnectedAt = {};

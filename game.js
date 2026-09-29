@@ -24,7 +24,7 @@ const MIN_BID = 130;
 const MAX_BID = 250;
 const BIDDING_TIME_MS = 30000;
 const TURN_TIME_MS = 30000;
-const RECONNECT_GRACE_MS = 5000; // how long a disconnected player's turn is held open before we auto-play/auto-resolve for them
+const RECONNECT_GRACE_MS = 5000;
 
 let gameState = {
     phase: 'LOBBY',       // LOBBY, BIDDING, TRUMP_SELECTION, PLAYING, TRICK_EVALUATION, GAMEOVER
@@ -41,7 +41,7 @@ let gameState = {
     excludedIds: [],
     lobbyOrder: [],
     disconnectedIds: [],
-    disconnectedAt: {},    // id -> timestamp when marked disconnected, for the reconnect grace period
+    disconnectedAt: {},
     biddingDeadline: null,
     turnDeadline: null,
     trumpSelectionDeadline: null,
@@ -72,12 +72,10 @@ function isDisconnected(id) {
     return (gameState.disconnectedIds || []).includes(id);
 }
 
-// True once a disconnected player has been gone long enough that we stop waiting for them
-// (auto-play their turn / auto-resolve their trump pick) rather than holding the game open.
 function hasGraceExpired(id) {
     if (!isDisconnected(id)) return false;
     const at = gameState.disconnectedAt && gameState.disconnectedAt[id];
-    if (!at) return true; // no timestamp on record (e.g. an older save) - don't block on it
+    if (!at) return true;
     return Date.now() - at >= RECONNECT_GRACE_MS;
 }
 
@@ -164,11 +162,8 @@ function handlePlayCard(playerId, playedCard) {
     const player = gameState.players[playerIndex];
 
     const cardIndex = player.hand.findIndex(c => c.id === playedCard.id);
-    if (cardIndex === -1) return; // not actually in this player's hand
+    if (cardIndex === -1) return;
 
-    // Validate using OUR record of the card, never the client-supplied one - otherwise a
-    // modified client could claim a trump card's suit matches the lead suit (bypassing the
-    // follow-suit rule) while still having the real trump card looked up and played below.
     const realCard = player.hand[cardIndex];
     if (!isCardPlayable(playerId, realCard)) return;
 
@@ -444,8 +439,6 @@ function autoResolveTrumpSelection() {
     const bidderId = gameState.highestBid.playerId;
     const bidderIndex = gameState.players.findIndex(p => p.id === bidderId);
     if (bidderIndex === -1) {
-        // The bid winner isn't even in the game anymore (e.g. kicked) - nothing sane to
-        // resolve, so just start a fresh deal rather than leaving everyone stuck.
         startDeal();
         return;
     }
@@ -520,9 +513,7 @@ function isValidCardCode(code) {
 function handleSetTrump(playerId, suit, calledCardsArray) {
     if (gameState.isPaused) return;
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
-    if (!suits.includes(suit)) return; // reject anything but a real suit - these two fields get
-                                        // rendered unescaped on every client, so this also closes
-                                        // a stored-XSS hole a modified client could otherwise use
+    if (!suits.includes(suit)) return;
     const cleanCalled = (Array.isArray(calledCardsArray) ? calledCardsArray : []).filter(isValidCardCode);
 
     gameState.trumpSuit = suit;

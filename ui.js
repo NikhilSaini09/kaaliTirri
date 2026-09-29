@@ -24,7 +24,8 @@ function playTone(freq, type, duration, vol) {
     osc.start();
     osc.stop(audioCtx.currentTime + duration);
 }
-function playCardSound() { playTone(250, 'triangle', 0.1, 0.4); } 
+function playCardSound() { playTone(250, 'triangle', 0.1, 0.4); }
+function playKaaliTirriSound() { playTone(300, 'sawtooth', 0.2, 0.5); setTimeout(() => playTone(600, 'square', 0.4, 0.4), 100); }
 function playTurnSound() { playTone(600, 'sine', 0.3, 0.2); setTimeout(() => playTone(800, 'sine', 0.4, 0.2), 100); } 
 function playTickSound() { playTone(800, 'square', 0.05, 0.05); } 
 
@@ -279,7 +280,12 @@ function renderGameBoard() {
     // growing rather than from the local click, so it fires the same way for all clients.
     if (gameState.phase === 'PLAYING' || gameState.phase === 'TRICK_EVALUATION') {
         if (previousBoardLength !== null && gameState.board.length > previousBoardLength && !gameState.isPaused) {
-            playCardSound();
+            const latestCard = gameState.board[gameState.board.length - 1];
+            if (latestCard && latestCard.value === '3' && latestCard.suit === '♠') {
+                playKaaliTirriSound();
+            } else {
+                playCardSound();
+            }
         }
         previousBoardLength = gameState.board.length;
     } else {

@@ -274,8 +274,14 @@ function evaluateRoundEnd() {
     });
 }
 
+const EVICTION_ORDER = [];
 const evictionValues = ['2', '3', '4', '6', '7', '8', '9'];
 const evictionSuits = ['♦', '♣', '♥', '♠'];
+for (let v of evictionValues) {
+    for (let s of evictionSuits) {
+        if (!(v === '3' && s === '♠')) EVICTION_ORDER.push(`${v}${s}`);
+    }
+}
 function startDeal() {
     let fullDeck = generateDeck();
     shuffle(fullDeck);
@@ -288,17 +294,7 @@ function startDeal() {
     const totalCardsToDeal = cardsPerPlayer * numPlayers;
     const cardsToRemoveCount = 52 - totalCardsToDeal;
 
-    let evictionList = [];
-    
-    for (let v of evictionValues) {
-        for (let s of evictionSuits) {
-            if (!(v === '3' && s === '♠')) { 
-                evictionList.push(`${v}${s}`);
-            }
-        }
-    }
-
-    const cardsToEvict = evictionList.slice(0, cardsToRemoveCount);
+    const cardsToEvict = EVICTION_ORDER.slice(0, cardsToRemoveCount);
 
     gameState.deck = fullDeck.filter(card => !cardsToEvict.includes(`${card.value}${card.suit}`));
     shuffle(gameState.deck);

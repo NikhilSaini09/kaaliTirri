@@ -15,10 +15,15 @@ const RATE_LIMIT_MAX_ACTIONS = 10;
 
 function broadcastState() {
     if (!isHost) return;
+
+    const safeState = getSanitizedStateForClient(null);
     Object.values(connections).forEach(conn => {
         try {
-            const safeState = getSanitizedStateForClient(conn.peer);
-            conn.send({ type: 'STATE_UPDATE', state: safeState });
+            const realPlayer = gameState.players.find(p => p.id === conn.peer);
+            const clientPlayers = safeState.players.map(p => 
+                p.id === conn.peer && realPlayer ? { ...p, hand: realPlayer.hand } : p
+            );
+            conn.send({ type: 'STATE_UPDATE', state: { ...safeState, players: clientPlayers } });
         } catch (e) {}
     });
     renderState(); 
@@ -111,9 +116,22 @@ function iceConfig() {
                 { urls: 'stun:stun1.l.google.com:19302' },
                 { urls: 'stun:stun2.l.google.com:19302' },
                 { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:openrelay.metered.ca:80' },
+                { urls: "stun:stun.relay.metered.ca:80" },
+
                 { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
                 { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
-                { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+                { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+                { urls: "turn:standard.relay.metered.ca:80",
+                    username: atob("ZjcxZjU2NzkyZmZjOGViZDUzMTY1YWY3"), credential: atob("TXBYTU8wTGZ4MFJhaG9kUQ==")},
+                { urls: "turn:standard.relay.metered.ca:80?transport=tcp",
+                    username: atob("ZjcxZjU2NzkyZmZjOGViZDUzMTY1YWY3"), credential: atob("TXBYTU8wTGZ4MFJhaG9kUQ==")},
+                { urls: "turn:standard.relay.metered.ca:443",
+                    username: atob("ZjcxZjU2NzkyZmZjOGViZDUzMTY1YWY3"), credential: atob("TXBYTU8wTGZ4MFJhaG9kUQ==")},
+                { urls: "turns:standard.relay.metered.ca:443?transport=tcp",
+                    username: atob("ZjcxZjU2NzkyZmZjOGViZDUzMTY1YWY3"), credential: atob("TXBYTU8wTGZ4MFJhaG9kUQ==")},
+                { urls: "turn:free.expressturn.com:3478",
+                    username: atob("MDAwMDAwMDAyMTA2MDU0Njkz"), credential: atob("US95aXc1UXdGRVVmTDRqR3BuMkRvYWtUNU1BPQ==") }
             ]
         }
     };

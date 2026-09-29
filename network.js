@@ -44,6 +44,7 @@ function kickPlayer(targetId) {
     gameState.lobbyOrder = (gameState.lobbyOrder || []).filter(id => id !== targetId);
     gameState.disconnectedIds = (gameState.disconnectedIds || []).filter(id => id !== targetId);
     if (gameState.disconnectedAt) delete gameState.disconnectedAt[targetId];
+    if (typeof cpuBidPlans !== 'undefined') delete cpuBidPlans[targetId];
     broadcastState();
 }
 
@@ -270,6 +271,7 @@ function promoteToHost(targetId) {
     if (isDisconnected(targetId)) { alert("That player is disconnected."); return; }
     const targetPlayer = gameState.players.find(p => p.id === targetId);
     if (!targetPlayer) { alert("Only an active player can be made host."); return; }
+    if (targetPlayer.isCPU) { alert("A CPU player can't be made host."); return; }
 
     const mePlayer = gameState.players.find(p => p.id === myPeerId);
     if (mePlayer) mePlayer.name = mePlayer.name.replace(' (Host)', '').trim();

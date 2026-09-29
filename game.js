@@ -60,8 +60,8 @@ function stripSpectatorTag(name) {
 
 function getLobbyMembers() {
     const members = [
-        ...gameState.players.map(p => ({ id: p.id, name: p.name })),
-        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name) }))
+        ...gameState.players.map(p => ({ id: p.id, name: p.name, isCPU: !!p.isCPU })),
+        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU }))
     ];
     const order = gameState.lobbyOrder || [];
     const rank = id => { const i = order.indexOf(id); return i === -1 ? order.length : i; };
@@ -90,6 +90,20 @@ function toggleSeat(targetId) {
     broadcastState();
 }
 
+const MAX_CPU_PLAYERS = 7;
+
+function addCpuPlayer() {
+    if (!isHost || gameState.phase !== 'LOBBY') return;
+    const existingCpuCount = gameState.players.filter(p => p.isCPU).length;
+    if (existingCpuCount >= MAX_CPU_PLAYERS) return;
+    const id = 'cpu_' + Math.random().toString(36).slice(2, 9);
+    gameState.players.push({
+        id, name: `CPU ${existingCpuCount + 1}`, hand: [], wonCards: [], points: 0,
+        currentBid: 0, team: 'UNKNOWN', isCPU: true
+    });
+    broadcastState();
+}
+
 function moveMember(targetId, dir) {
     if (!isHost || gameState.phase !== 'LOBBY') return;
     const order = getLobbyMembers().map(m => m.id);
@@ -108,11 +122,11 @@ function applySeatSelection() {
     if (seated.length < MIN_PLAYERS) return false;
 
     gameState.players = seated.map(m => ({
-        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN'
+        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN', isCPU: !!m.isCPU
     }));
     gameState.spectators = members
         .filter(m => excluded.has(m.id))
-        .map(m => ({ id: m.id, name: m.name + ' (Spectator)' }));
+        .map(m => ({ id: m.id, name: m.name + ' (Spectator)', isCPU: !!m.isCPU }));
     gameState.lobbyOrder = members.map(m => m.id);
     gameState.disconnectedIds = [];
     gameState.disconnectedAt = {};
@@ -315,6 +329,10 @@ function startDeal() {
     gameState.isPaused = false;
     gameState.pausedRemaining = null;
 
+    cpuBidPlans = {};
+    cpuTrumpPlan = null;
+    cpuMovePlan = null;
+
     let currentPlayer = 0;
     while (gameState.deck.length > 0) {
         gameState.players[currentPlayer].hand.push(gameState.deck.pop());
@@ -381,6 +399,41 @@ function resetBiddingTimer() {
     gameState.biddingDeadline = Date.now() + BIDDING_TIME_MS;
 }
 
+// --- CPU orchestration: all state below is host-side-only "thinking" bookkeeping, never
+// broadcast (it isn't part of gameState) and reset every deal via startDeal(). ---
+let cpuBidPlans = {};   // playerId -> { maxBid, nextActionAt }
+let cpuTrumpPlan = null; // { playerId, actAt } - the CPU currently choosing trump, if any
+let cpuMovePlan = null;  // { playerId, actAt } - the CPU currently deciding its card play, if any
+
+function runCpuBidding() {
+    if (!isHost || gameState.isPaused || gameState.phase !== 'BIDDING') return;
+    let changed = false;
+
+    gameState.players.forEach(player => {
+        if (!player.isCPU || player.hasFolded) return;
+        if (gameState.highestBid.playerId === player.id) return; // already winning, nothing to decide
+
+        let plan = cpuBidPlans[player.id];
+        if (!plan) {
+            plan = { maxBid: getCpuMaxBid(player.hand), nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
+            cpuBidPlans[player.id] = plan;
+        }
+        if (Date.now() < plan.nextActionAt) return;
+
+        const nextAmount = gameState.highestBid.amount === 0 ? MIN_BID : gameState.highestBid.amount + 5;
+        if (nextAmount <= plan.maxBid && nextAmount <= MAX_BID) {
+            handlePlaceBid(player.id, nextAmount);
+        } else {
+            handleFold(player.id);
+        }
+        plan.nextActionAt = Date.now() + 1200 + Math.random() * 2200; // stagger the next decision too
+        changed = true;
+    });
+
+    if (changed) broadcastState();
+}
+setInterval(runCpuBidding, 1000);
+
 function checkBiddingTimeout() {
     if (!isHost) return;
     if (gameState.isPaused) return;
@@ -417,11 +470,26 @@ function checkTurnTimeout() {
     const player = gameState.players[gameState.turnIndex];
     if (!player) { gameState.turnDeadline = null; return; }
 
+    if (player.isCPU) {
+        if (!cpuMovePlan || cpuMovePlan.playerId !== player.id) {
+            cpuMovePlan = { playerId: player.id, actAt: Date.now() + 700 + Math.random() * 1300 };
+        }
+        if (Date.now() < cpuMovePlan.actAt) return;
+        const card = getBestCardToPlay(player.id, gameState);
+        cpuMovePlan = null;
+        if (card) handlePlayCard(player.id, card);
+        else gameState.turnDeadline = null;
+        broadcastState();
+        return;
+    }
+    cpuMovePlan = null; // the CPU-in-progress marker only ever applies to the seat currently up
+
     const isPlayerDisconnected = isDisconnected(player.id);
 
     if ((isPlayerDisconnected && hasGraceExpired(player.id)) || Date.now() >= gameState.turnDeadline) {
-        const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
-        const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
+        // Same fairness-respecting algo a CPU uses for its own turns - it only looks at this
+        // player's own hand and what's already been played, never at anyone else's cards.
+        const cardToPlay = getBestCardToPlay(player.id, gameState);
 
         if (cardToPlay) {
             handlePlayCard(player.id, cardToPlay);
@@ -459,6 +527,21 @@ function checkTrumpSelectionTimeout() {
     if (gameState.phase !== 'TRUMP_SELECTION') return;
 
     const bidderId = gameState.highestBid.playerId;
+    const bidder = gameState.players.find(p => p.id === bidderId);
+
+    if (bidder && bidder.isCPU) {
+        if (!cpuTrumpPlan || cpuTrumpPlan.playerId !== bidderId) {
+            cpuTrumpPlan = { playerId: bidderId, actAt: Date.now() + 1000 + Math.random() * 1500 };
+        }
+        if (Date.now() >= cpuTrumpPlan.actAt) {
+            const choice = getCpuTrumpChoice(bidder, gameState.players.length);
+            cpuTrumpPlan = null;
+            handleSetTrump(bidderId, choice.suit, choice.calls);
+            broadcastState();
+        }
+        return;
+    }
+
     const bidderDisconnected = bidderId && isDisconnected(bidderId) && hasGraceExpired(bidderId);
     const timedOut = gameState.trumpSelectionDeadline && Date.now() >= gameState.trumpSelectionDeadline;
 

@@ -11,8 +11,25 @@
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
+    <button id="howToPlayBtn" aria-label="How to play" title="How to play">❓</button>
+
     <!-- VIEW 1: Landing Page -->
     <div id="view-landing" class="view-container">
+        <div class="game-logo" aria-hidden="true">
+            <svg viewBox="0 0 120 120" class="logo-badge">
+                <defs>
+                    <linearGradient id="logoGold" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#f3dfa0"/>
+                        <stop offset="100%" stop-color="#c9a24d"/>
+                    </linearGradient>
+                </defs>
+                <circle cx="60" cy="60" r="55" fill="rgba(0,0,0,0.25)"/>
+                <circle cx="60" cy="60" r="55" fill="none" stroke="url(#logoGold)" stroke-width="2.5"/>
+                <path fill="url(#logoGold)" d="M60,26 C38,50 28,64 28,75 C28,86 38,94 49,90 C53,88 57,85 60,80 C63,85 67,88 71,90 C82,94 92,86 92,75 C92,64 82,50 60,26 Z"/>
+                <path fill="url(#logoGold)" d="M53,80 L67,80 L72,102 L48,102 Z"/>
+            </svg>
+            <span class="logo-digit">3</span>
+        </div>
         <h1 class="brand">Kaali Tirri</h1>
         <div class="brand-suit-row">♠ ♥ ♦ ♣</div>
         <div class="landing-card">
@@ -35,6 +52,7 @@
         <button id="startGameBtn" class="btn-success" style="display: none;">Start Game</button>
 
         <div class="lobby-utility-row">
+            <button id="addCpuBtn" class="btn-wood" style="display:none;">🤖 Add CPU</button>
             <button id="saveBtn" class="btn-wood">Save Game</button>
             <label for="loadInput" class="btn-wood">Load Save</label>
             <input type="file" id="loadInput" accept=".json" style="display: none;">
@@ -146,8 +164,37 @@
         </div>
     </div>
 
+    <div id="how-to-play-backdrop" class="page-modal-backdrop" style="display: none;"></div>
+    <div id="how-to-play-modal" class="page-modal" style="display: none;">
+        <div class="page-modal-header">
+            <h3>How to Play Kaali Tirri</h3>
+            <button id="closeHowToPlayBtn" class="btn-danger">✕ Close</button>
+        </div>
+        <div class="page-modal-body">
+            <h4>The Deck &amp; Scoring</h4>
+            <p>A standard 52-card deck. Card points: <b>A, K, Q, J, 10</b> = 10 pts each &middot; <b>5</b> = 5 pts &middot; <b>3♠ (Kaali Tirri)</b> = 30 pts &middot; everything else = 0 pts. Max possible: 250 pts.</p>
+            <p>Rank, low to high: 2 3 4 5 6 7 8 9 10 J Q K A.</p>
+            <hr>
+            <h4>Deal &amp; Bidding</h4>
+            <p>Cards are dealt evenly to every seated player. Bidding then opens: raise in multiples of 5 (130&ndash;250) or fold. Highest bidder (or whoever hits 250 first) becomes the <b>Bid Winner</b>. If nobody bids before the timer runs out, a random player is assigned 130 pts.</p>
+            <hr>
+            <h4>Trump &amp; Secret Teams</h4>
+            <p>The Bid Winner picks a <b>Trump suit</b> and calls one or more <b>partner cards</b> (the number scales with player count). Whoever holds a called card is secretly on the Bidder's team — nobody finds out until that card is actually played.</p>
+            <hr>
+            <h4>Playing a Trick</h4>
+            <p>The Bid Winner leads the first trick; whoever wins a trick leads the next. Follow the led suit if you can. If you can't, play any card — trump or otherwise. Highest card of the led suit wins, unless a trump is played, in which case the highest trump wins.</p>
+            <hr>
+            <h4>Winning the Round</h4>
+            <p>Trick points go to whoever wins each trick. At the end, if the Bidder's team's total meets or beats the bid amount, they win — otherwise the Defenders do.</p>
+            <hr>
+            <h4>Table Tips</h4>
+            <p>30 seconds per turn — an idle player gets a card auto-played for them. The host can pause, reorder seats, add CPU players, hand the host role to someone else, and save/load the game mid-session.</p>
+        </div>
+    </div>
+
     <script src="network.js"></script>
     <script src="game.js"></script>
+    <script src="smartAiPlayer.js"></script>
     <script src="ui.js"></script>
 </body>
 </html>

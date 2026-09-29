@@ -84,6 +84,13 @@ function renderLobby() {
         nameEl.textContent = cleanPlayerName(member.name);
         main.appendChild(nameEl);
 
+        if (member.isCPU) {
+            const cpuTag = document.createElement('span');
+            cpuTag.className = 'cpu-tag';
+            cpuTag.textContent = '🤖 CPU';
+            main.appendChild(cpuTag);
+        }
+
         if (member.id === myPeerId) {
             const you = document.createElement('span');
             you.className = 'you-tag';
@@ -124,7 +131,7 @@ function renderLobby() {
             controls.appendChild(up);
             controls.appendChild(down);
 
-            const isEligibleForHost = member.id !== myPeerId && !isGone &&
+            const isEligibleForHost = member.id !== myPeerId && !isGone && !member.isCPU &&
                 gameState.players.some(p => p.id === member.id);
             if (isEligibleForHost) {
                 const makeHost = document.createElement('button');
@@ -144,7 +151,7 @@ function renderLobby() {
                 const kick = document.createElement('button');
                 kick.className = 'btn-danger';
                 kick.style.cssText = 'padding: 5px 12px; font-size: 13px;';
-                kick.textContent = 'Kick';
+                kick.textContent = member.isCPU ? 'Remove' : 'Kick';
                 kick.addEventListener('click', () => kickPlayer(member.id));
                 controls.appendChild(kick);
             }
@@ -165,6 +172,13 @@ function renderLobby() {
 
     if (isHost) {
         document.getElementById('startGameBtn').style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
+        const addCpuBtn = document.getElementById('addCpuBtn');
+        if (addCpuBtn) {
+            addCpuBtn.style.display = 'inline-block';
+            const cpuCount = gameState.players.filter(p => p.isCPU).length;
+            addCpuBtn.disabled = cpuCount >= MAX_CPU_PLAYERS;
+            addCpuBtn.title = addCpuBtn.disabled ? `Up to ${MAX_CPU_PLAYERS} CPU players` : 'Add a CPU-controlled player';
+        }
     }
 }
 
@@ -365,7 +379,11 @@ function renderGameBoard() {
         if (!entry) {
             const cardEl = createCardElement(card, false);
             cardEl.classList.add('played-card');
-            const rotation = (Math.random() * 12 - 6);
+            // One-shot entrance animation - CSS animations on a class that's never removed
+            // only ever play once (when the element is first inserted), so no cleanup needed.
+            const isKaaliTirri = card.value === '3' && card.suit === '♠';
+            cardEl.classList.add(isKaaliTirri ? 'is-kaali-tirri' : 'is-entering');
+            const rotation = (Math.random() * 12 - 6); // pick once, keep for the card's lifetime on the table
             entry = { el: cardEl, rotation };
             boardCardCache[card.id] = entry;
             boardArea.appendChild(cardEl);
@@ -416,7 +434,7 @@ function renderGameBoard() {
             oppDiv.style.transform = 'translate(-50%, -50%)';
         }
 
-        let teamIcon = player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : '');
+        let teamIcon = (player.isCPU ? '🤖 ' : '') + (player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : ''));
         const cleanName = cleanPlayerName(player.name);
 
         let pileHtml = '';
@@ -871,6 +889,11 @@ function openWonCardsModal(player) {
 }
 
 // UI Bindings
+document.getElementById('addCpuBtn')?.addEventListener('click', () => {
+    if (!isHost) return;
+    addCpuPlayer();
+});
+
 document.getElementById('startGameBtn').addEventListener('click', () => {
     if (!isHost) return;
     if (!applySeatSelection()) {
@@ -961,6 +984,18 @@ function closeWonCardsModal() {
 }
 document.getElementById('closeWonCardsBtn')?.addEventListener('click', closeWonCardsModal);
 document.getElementById('won-cards-modal-backdrop')?.addEventListener('click', closeWonCardsModal);
+
+function openHowToPlay() {
+    document.getElementById('how-to-play-modal').style.display = 'block';
+    document.getElementById('how-to-play-backdrop').style.display = 'block';
+}
+function closeHowToPlay() {
+    document.getElementById('how-to-play-modal').style.display = 'none';
+    document.getElementById('how-to-play-backdrop').style.display = 'none';
+}
+document.getElementById('howToPlayBtn')?.addEventListener('click', openHowToPlay);
+document.getElementById('closeHowToPlayBtn')?.addEventListener('click', closeHowToPlay);
+document.getElementById('how-to-play-backdrop')?.addEventListener('click', closeHowToPlay);
 
 function closeHostMenu() {
     const menu = document.getElementById('host-dropdown');

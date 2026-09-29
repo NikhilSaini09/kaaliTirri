@@ -24,7 +24,8 @@ function playTone(freq, type, duration, vol) {
     osc.start();
     osc.stop(audioCtx.currentTime + duration);
 }
-function playCardSound() { playTone(250, 'triangle', 0.1, 0.4); } 
+function playCardSound() { playTone(250, 'triangle', 0.1, 0.4); }
+function playKaaliTirriSound() { playTone(300, 'sawtooth', 0.2, 0.5); setTimeout(() => playTone(600, 'square', 0.4, 0.4), 100); }
 function playTurnSound() { playTone(600, 'sine', 0.3, 0.2); setTimeout(() => playTone(800, 'sine', 0.4, 0.2), 100); } 
 function playTickSound() { playTone(800, 'square', 0.05, 0.05); } 
 
@@ -48,6 +49,7 @@ function renderState() {
 }
 
 function renderLobby() {
+    stopTimerBarLoop();
     const lobbyDiv = document.getElementById('lobby-players');
     lobbyDiv.innerHTML = '';
 
@@ -121,6 +123,22 @@ function renderLobby() {
 
             controls.appendChild(up);
             controls.appendChild(down);
+
+            const isEligibleForHost = member.id !== myPeerId && !isGone &&
+                gameState.players.some(p => p.id === member.id);
+            if (isEligibleForHost) {
+                const makeHost = document.createElement('button');
+                makeHost.className = 'btn-wood';
+                makeHost.style.cssText = 'padding: 5px 10px; font-size: 13px;';
+                makeHost.textContent = '👑 Host';
+                makeHost.title = `Make ${cleanPlayerName(member.name)} the host`;
+                makeHost.addEventListener('click', () => {
+                    if (confirm(`Make ${cleanPlayerName(member.name)} the new host? You will become a regular player.`)) {
+                        promoteToHost(member.id);
+                    }
+                });
+                controls.appendChild(makeHost);
+            }
 
             if (member.id !== myPeerId) {
                 const kick = document.createElement('button');
@@ -200,7 +218,22 @@ function cleanPlayerName(name) {
     return name.replace(' (Host)', ' (H)').replace(' (Spectator)', ' (S)');
 }
 
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+}
+
 let previousTurnPlayerId = null;
+let previousBoardLength = null;
+let bidPanelWasOpen = false;
+let bidAmountEditedByUser = false;
+let hasAutoFocusedBidOnce = false;
+let trumpPanelWasOpen = false;
+
+let lastHandIds = null;
+let boardCardCache = {};
+let lastOppSignature = null;
 
 function renderGameBoard() {
     const myArea = document.getElementById('my-area');
@@ -217,7 +250,6 @@ function renderGameBoard() {
     const timerWrap = document.getElementById('timer-bar-wrap');
     const foldBanner = document.getElementById('fold-banner');
 
-    myArea.innerHTML = ''; boardArea.innerHTML = ''; oppArea.innerHTML = '';
     document.getElementById('phase-display').innerHTML = `Phase: <span class="phase-label">${PHASE_LABELS[gameState.phase] || gameState.phase}</span>`;
     hostControls.style.display = isHost ? 'block' : 'none';
 
@@ -236,6 +268,20 @@ function renderGameBoard() {
         playTurnSound();
     }
     previousTurnPlayerId = activeTurnPlayer ? activeTurnPlayer.id : null;
+
+    if (gameState.phase === 'PLAYING' || gameState.phase === 'TRICK_EVALUATION') {
+        if (previousBoardLength !== null && gameState.board.length > previousBoardLength && !gameState.isPaused) {
+            const latestCard = gameState.board[gameState.board.length - 1];
+            if (latestCard && latestCard.value === '3' && latestCard.suit === '♠') {
+                playKaaliTirriSound();
+            } else {
+                playCardSound();
+            }
+        }
+        previousBoardLength = gameState.board.length;
+    } else {
+        previousBoardLength = null;
+    }
 
     if (gameState.phase === 'BIDDING' && gameState.biddingDeadline) {
         timerWrap.classList.add('is-visible');
@@ -306,11 +352,26 @@ function renderGameBoard() {
     }
 
     // 1. Center Board
+    const winningCard = getCurrentWinningCard(gameState.board, gameState.trumpSuit);
+    const boardIdsNow = new Set(gameState.board.map(c => c.id));
+    Object.keys(boardCardCache).forEach(id => {
+        if (!boardIdsNow.has(id)) {
+            boardCardCache[id].el.remove();
+            delete boardCardCache[id];
+        }
+    });
     gameState.board.forEach((card) => {
-        const cardEl = createCardElement(card, false);
-        cardEl.classList.add('played-card');
-        const rotation = (Math.random() * 12 - 6);
-        cardEl.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
+        let entry = boardCardCache[card.id];
+        if (!entry) {
+            const cardEl = createCardElement(card, false);
+            cardEl.classList.add('played-card');
+            const rotation = (Math.random() * 12 - 6);
+            entry = { el: cardEl, rotation };
+            boardCardCache[card.id] = entry;
+            boardArea.appendChild(cardEl);
+        }
+        entry.el.classList.toggle('is-winning-card', !!(winningCard && card.id === winningCard.id));
+        entry.el.style.transform = `translate(-50%, -50%) rotate(${entry.rotation}deg)`;
 
         const CARD_R = isMobile ? 32 : 30;
         let leftPct = 50, topPct = 50;
@@ -321,13 +382,24 @@ function renderGameBoard() {
             leftPct = 50 + Math.cos(ang) * CARD_R;
             topPct = 50 + Math.sin(ang) * CARD_R;
         }
-        cardEl.style.left = `${leftPct}%`;
-        cardEl.style.top = `${topPct}%`;
-        boardArea.appendChild(cardEl);
+        entry.el.style.left = `${leftPct}%`;
+        entry.el.style.top = `${topPct}%`;
     });
 
     // 2. Opponents
-    opponents.forEach((player) => {
+    const oppSignature = JSON.stringify({
+        isMobile, dense,
+        list: opponents.map(p => [
+            p.id, p.hand.length, p.points, p.team, !!p.hasFolded,
+            p.wonCards ? p.wonCards.length : 0,
+            activeTurnPlayer && activeTurnPlayer.id === p.id,
+            !isMobile ? seatPos[p.id] : null
+        ])
+    });
+    if (oppSignature !== lastOppSignature) {
+        lastOppSignature = oppSignature;
+        oppArea.innerHTML = '';
+        opponents.forEach((player) => {
         const oppDiv = document.createElement('div');
         oppDiv.className = 'opponent-container' + (isMobile ? ' compact' : '') + (dense ? ' dense' : '');
 
@@ -351,18 +423,17 @@ function renderGameBoard() {
         if (player.wonCards && player.wonCards.length > 0) {
             pileHtml = isMobile
                 ? `<div class="won-pile-btn" title="Click to view won cards"><span>${player.wonCards.length}</span></div>`
-                : // <div class="card face-down mini-card"></div>
-                ` <div class="won-pile-btn" title="Click to view won cards">
-                    <span>${player.wonCards.length}</span>
-                </div>
-            `;
+                : ` <div class="won-pile-btn" title="Click to view won cards">
+                        <span>${player.wonCards.length}</span>
+                    </div>`
+            ;
         }
 
         const fanHtml = isMobile ? '' :
-            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(player.hand.length / 2 + 1, 5))}</div>`;
+            `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(Math.trunc((player.hand.length + 1) / 2), 5))}</div>`;
 
         oppDiv.innerHTML = `
-            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${cleanName}</span>
+            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${escapeHtml(cleanName)}</span>
             <span class="opp-meta">${player.hand.length} C &middot; ${player.points} Pts</span>
             ${fanHtml}
             ${isFolded ? '<span class="fold-tag">FOLDED</span>' : ''}
@@ -378,7 +449,8 @@ function renderGameBoard() {
         }
 
         oppArea.appendChild(oppDiv);
-    });
+        });
+    }
 
     const tableZoneEl = document.querySelector('.table-zone');
     tableZoneEl.style.paddingTop = isMobile ? `${Math.max(84, oppArea.offsetHeight + 28)}px` : '';
@@ -386,10 +458,10 @@ function renderGameBoard() {
     if (gameState.phase !== 'LOBBY') {
         gameInfo.style.display = 'inline-flex';
         if (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION') {
-            document.getElementById('bid-info').innerHTML = `High Bid: <b>${gameState.highestBid.amount || '—'}</b> (${gameState.highestBid.playerName ? cleanPlayerName(gameState.highestBid.playerName) : 'None yet'})`;
+            document.getElementById('bid-info').innerHTML = `High Bid: <b>${gameState.highestBid.amount || '—'}</b> (${gameState.highestBid.playerName ? escapeHtml(cleanPlayerName(gameState.highestBid.playerName)) : 'None yet'})`;
             document.getElementById('trump-info').innerHTML = '';
         } else {
-            document.getElementById('bid-info').innerHTML = `Target: <b>${gameState.highestBid.amount}</b> (${cleanPlayerName(gameState.highestBid.playerName)})`;
+            document.getElementById('bid-info').innerHTML = `Target: <b>${gameState.highestBid.amount}</b> (${escapeHtml(cleanPlayerName(gameState.highestBid.playerName))})`;
             const trumpColor = (gameState.trumpSuit === '♥' || gameState.trumpSuit === '♦') ? 'red' : 'black';
             let trumpHtml = `Trump: <span class="trump-suit-display ${trumpColor}">${gameState.trumpSuit}</span>`;
             if (gameState.originalCalledCards && gameState.originalCalledCards.length > 0) {
@@ -402,16 +474,20 @@ function renderGameBoard() {
             }
             document.getElementById('trump-info').innerHTML = trumpHtml;
         }
+
     }
 
     // 3. Local Player
     const me = gameState.players.find(p => p.id === myPeerId);
     if (me) {
         const isMyTurn = activeTurnPlayer && activeTurnPlayer.id === me.id;
+
+        const oldStatusRow = myArea.querySelector('.my-status-row');
+        if (oldStatusRow) oldStatusRow.remove();
         const statusRow = document.createElement('div');
         statusRow.className = 'my-status-row';
-        myArea.appendChild(statusRow);
-        
+        myArea.insertBefore(statusRow, myArea.firstChild);
+
         if (isMyTurn) {
             const badge = document.createElement('div');
             badge.className = 'your-turn-badge';
@@ -419,20 +495,37 @@ function renderGameBoard() {
             statusRow.appendChild(badge);
         }
 
-        me.hand.forEach((card, index) => {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'my-card-wrapper';
-            wrapper.style.zIndex = index;
+        const currentHandIds = me.hand.map(c => c.id).join('|');
+        if (currentHandIds !== lastHandIds) {
+            myArea.querySelectorAll('.my-card-wrapper').forEach(el => el.remove());
+            me.hand.forEach((card, index) => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'my-card-wrapper';
+                wrapper.dataset.cardId = card.id;
+                wrapper.style.zIndex = index;
 
-            const playable = isCardPlayable(myPeerId, card);
-            const cardEl = createCardElement(card, true, playable);
-            if (playable) cardEl.addEventListener('click', () => requestPlayCard(card));
+                const cardEl = createCardElement(card, false);
+                cardEl.addEventListener('click', () => {
+                    if (wrapper.classList.contains('is-playable')) requestPlayCard(card);
+                });
 
-            wrapper.appendChild(cardEl);
-            myArea.appendChild(wrapper);
-        });
+                wrapper.appendChild(cardEl);
+                myArea.appendChild(wrapper);
+            });
+            lastHandIds = currentHandIds;
+        }
 
         const cardWrappers = myArea.querySelectorAll('.my-card-wrapper');
+        cardWrappers.forEach(wrapper => {
+            const card = me.hand.find(c => c.id === wrapper.dataset.cardId);
+            const cardEl = wrapper.querySelector('.card');
+            if (!card || !cardEl) return;
+            const playable = isCardPlayable(myPeerId, card);
+            wrapper.classList.toggle('is-playable', playable);
+            cardEl.style.opacity = playable ? '' : '0.5';
+            cardEl.style.cursor = playable ? 'pointer' : 'not-allowed';
+        });
+
         if (cardWrappers.length > 0) {
             const cardCount = cardWrappers.length;
             const gap = 8;
@@ -461,7 +554,6 @@ function renderGameBoard() {
             const myPileDiv = document.createElement('div');
             myPileDiv.className = 'my-won-pile';
             myPileDiv.title = "Click to view your won cards";
-                 // <div class="card face-down mini-card"></div>
             myPileDiv.innerHTML = `
                 <span>${me.wonCards.length} (${me.points} pts)</span>
             `;
@@ -484,45 +576,70 @@ function renderGameBoard() {
             showOverlay = true;
             biddingPanel.style.display = 'flex';
 
-            setTimeout(() => document.getElementById('bidAmount').focus(), 100);
             const minBid = Math.max(MIN_BID, gameState.highestBid.amount + 5);
             const bidInput = document.getElementById('bidAmount');
             bidInput.min = minBid;
             bidInput.max = MAX_BID;
             bidInput.placeholder = `${minBid}\u2013${MAX_BID}`;
 
-            bidInput.value = minBid;
+            if (!bidPanelWasOpen) {
+                bidInput.value = minBid;
+                bidAmountEditedByUser = false;
+                if (!hasAutoFocusedBidOnce && window.innerWidth > 860) {
+                    bidInput.focus();
+                    bidInput.select();
+                    hasAutoFocusedBidOnce = true;
+                }
+            } else if (!bidAmountEditedByUser) {
+                bidInput.value = minBid;
+            }
+            bidPanelWasOpen = true;
         }
-        else if (gameState.phase === 'TRUMP_SELECTION' && gameState.highestBid.playerId === myPeerId) {
-            showOverlay = true;
-            trumpPanel.style.display = 'flex';
+        else {
+            bidPanelWasOpen = false;
+            if (gameState.phase === 'TRUMP_SELECTION' && gameState.highestBid.playerId === myPeerId) {
+                showOverlay = true;
+                trumpPanel.style.display = 'flex';
 
-            teamCardsContainer.innerHTML = '';
-            let allowedCards = Math.floor((gameState.players.length - 2) / 2);
-            for (let i = 0; i < allowedCards; i++) {
-                const selectorDiv = document.createElement('div');
+                if (!trumpPanelWasOpen) {
+                    teamCardsContainer.innerHTML = '';
+                    let allowedCards = Math.floor((gameState.players.length - 2) / 2);
+                    for (let i = 0; i < allowedCards; i++) {
+                        const selectorDiv = document.createElement('div');
 
-                const rankSelect = document.createElement('select');
-                rankSelect.className = 'team-rank-select';
-                rankSelect.id = `team-rank-${i}`;
-                rankSelect.name = `team-rank-${i}`;
-                rankSelect.setAttribute('aria-label', `Partner card ${i + 1} rank`);
-                values.forEach(v => rankSelect.appendChild(new Option(v, v)));
+                        const rankSelect = document.createElement('select');
+                        rankSelect.className = 'team-rank-select';
+                        rankSelect.id = `team-rank-${i}`;
+                        rankSelect.name = `team-rank-${i}`;
+                        rankSelect.setAttribute('aria-label', `Partner card ${i + 1} rank`);
+                        values.forEach(v => rankSelect.appendChild(new Option(v, v)));
 
-                const suitSelect = document.createElement('select');
-                suitSelect.className = 'team-suit-select';
-                suitSelect.id = `team-suit-${i}`;
-                suitSelect.name = `team-suit-${i}`;
-                suitSelect.setAttribute('aria-label', `Partner card ${i + 1} suit`);
-                suits.forEach(s => suitSelect.appendChild(new Option(s, s)));
+                        const suitSelect = document.createElement('select');
+                        suitSelect.className = 'team-suit-select';
+                        suitSelect.id = `team-suit-${i}`;
+                        suitSelect.name = `team-suit-${i}`;
+                        suitSelect.setAttribute('aria-label', `Partner card ${i + 1} suit`);
+                        suits.forEach(s => suitSelect.appendChild(new Option(s, s)));
 
-                selectorDiv.appendChild(rankSelect); selectorDiv.appendChild(suitSelect);
-                teamCardsContainer.appendChild(selectorDiv);
+                        selectorDiv.appendChild(rankSelect); selectorDiv.appendChild(suitSelect);
+                        teamCardsContainer.appendChild(selectorDiv);
+                    }
+                    trumpPanelWasOpen = true;
+                }
+            } else {
+                trumpPanelWasOpen = false;
             }
         }
 
         actionOverlay.style.display = showOverlay ? 'flex' : 'none';
         actionOverlay.classList.toggle('no-dim', gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
+    } else {
+        if (lastHandIds !== null) {
+            myArea.innerHTML = '';
+            lastHandIds = null;
+        }
+        foldBanner.style.display = 'none';
+        actionOverlay.style.display = 'none';
     }
 
     // 4. Game Over Modal
@@ -534,7 +651,7 @@ function renderGameBoard() {
         let dTeamHtml = ''; let dTotal = 0;
 
         gameState.players.forEach(p => {
-            const clean = cleanPlayerName(p.name);
+            const clean = escapeHtml(cleanPlayerName(p.name));
             const stats = gameStats[clean.replace(" (H)", "")] || { wins: 0, gamesPlayed: 0, winRate: '0.0%' };
             const statLine = `<span style="font-size: 11px; opacity: 0.8; display: block;">Career: ${stats.wins}W / ${stats.gamesPlayed - stats.wins}L (${stats.winRate})</span>`;
             
@@ -545,14 +662,6 @@ function renderGameBoard() {
                 dTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${p.points} pts</b>${statLine}</div>`;
                 dTotal += p.points;
             }
-
-            // if (p.team === 'BIDDER_TEAM') {
-            //     bTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
-            //     bTotal += p.points;
-            // } else {
-            //     dTeamHtml += `<div>${cleanPlayerName(p.name)}: ${p.points}</div>`;
-            //     dTotal += p.points;
-            // }
         });
 
         document.getElementById('bidder-stats').innerHTML = bTeamHtml;
@@ -562,11 +671,28 @@ function renderGameBoard() {
         document.getElementById('bid-target').textContent = gameState.highestBid.amount;
 
         const won = bTotal >= gameState.highestBid.amount;
-        document.getElementById('score-title').textContent = won ? "Bidder Team WON! 🎉" : "Bidder Team LOST! ❌";
-        document.getElementById('score-title').style.color = won ? "#4CAF50" : "#f44336";
+        document.getElementById('score-title').textContent = won ? "Bidder Team WON!" : "Defender Team WON!";
+        document.getElementById('score-title').style.color = won ? "#f44336" : "#4CAF50";
     } else {
         scorecard.style.display = 'none';
     }
+}
+
+function getCurrentWinningCard(board, trumpSuit) {
+    if (!board || board.length === 0) return null;
+    const leadSuit = board[0].suit;
+    let winning = board[0];
+    for (let i = 1; i < board.length; i++) {
+        const card = board[i];
+        const isTrump = card.suit === trumpSuit;
+        const winIsTrump = winning.suit === trumpSuit;
+        if (isTrump && !winIsTrump) {
+            winning = card;
+        } else if ((isTrump && winIsTrump) || (!isTrump && !winIsTrump && card.suit === leadSuit)) {
+            if (getCardRank(card) > getCardRank(winning)) winning = card;
+        }
+    }
+    return winning;
 }
 
 function createCardElement(card, isClickable, isPlayable = true) {
@@ -583,7 +709,6 @@ function createCardElement(card, isClickable, isPlayable = true) {
 
 function requestPlayCard(card) {
     if (!isCardPlayable(myPeerId, card)) { alert("You cannot play this card."); return; }
-    playCardSound();
     if (isHost) { handlePlayCard(myPeerId, card); broadcastState(); }
     else if (hostConnection) hostConnection.send({ type: 'ACTION_PLAY_CARD', card: card });
 }
@@ -627,8 +752,8 @@ function loadGame(event) {
                 playerData = parsed.playerData || [];
                 
                 let allCurrentUsers = [];
-                gameState.players.forEach(p => allCurrentUsers.push({ id: p.id, name: p.name }));
-                (gameState.spectators || []).forEach(s => allCurrentUsers.push({ id: s.id, name: s.name }));
+                gameState.players.forEach(p => { if (!isDisconnected(p.id)) allCurrentUsers.push({ id: p.id, name: p.name }); });
+                (gameState.spectators || []).forEach(s => { if (!isDisconnected(s.id)) allCurrentUsers.push({ id: s.id, name: s.name }); });
                 
                 let uniqueUsers = Array.from(new Map(allCurrentUsers.map(item => [item.id, item])).values());
                 let currentPool = [...uniqueUsers];
@@ -701,6 +826,11 @@ function loadGame(event) {
                 parsed.gameState.pausedRemaining = 30000;
                 parsed.gameState.biddingDeadline = null;
                 parsed.gameState.turnDeadline = null;
+                parsed.gameState.trumpSelectionDeadline = null;
+
+                parsed.gameState.excludedIds = [];
+                parsed.gameState.disconnectedIds = [];
+                parsed.gameState.disconnectedAt = {};
 
                 gameState = parsed.gameState;
                 gameStats = parsed.gameStats || {};
@@ -780,6 +910,10 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
     }
 });
 
+document.getElementById('bidAmount').addEventListener('input', () => {
+    bidAmountEditedByUser = true;
+});
+
 document.getElementById('submitBidBtn').addEventListener('click', () => {
     const bidInput = document.getElementById('bidAmount');
     const bid = bidInput.value;
@@ -791,10 +925,12 @@ document.getElementById('submitBidBtn').addEventListener('click', () => {
         if (res && res.error) {
             alert(res.error);
         } else {
+            bidAmountEditedByUser = false;
             broadcastState(); 
         }
     }
     else if (hostConnection) {
+        bidAmountEditedByUser = false;
         hostConnection.send({ type: 'ACTION_PLACE_BID', amount: bid });
     }
 });

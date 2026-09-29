@@ -492,6 +492,9 @@ function togglePause() {
         } else if (gameState.turnDeadline) {
             gameState.pausedRemaining = gameState.turnDeadline - Date.now();
             gameState.turnDeadline = null;
+        } else if (gameState.trumpSelectionDeadline) {
+            gameState.pausedRemaining = gameState.trumpSelectionDeadline - Date.now();
+            gameState.trumpSelectionDeadline = null;
         }
         gameState.isPaused = true;
     } else {
@@ -501,6 +504,8 @@ function togglePause() {
                 gameState.biddingDeadline = Date.now() + remaining;
             } else if (gameState.phase === 'PLAYING') {
                 gameState.turnDeadline = Date.now() + remaining;
+            } else if (gameState.phase === 'TRUMP_SELECTION') {
+                gameState.trumpSelectionDeadline = Date.now() + remaining;
             }
         }
         gameState.pausedRemaining = null;

@@ -481,19 +481,6 @@ function renderGameBoard() {
             document.getElementById('trump-info').innerHTML = trumpHtml;
         }
 
-        // const turnOrderEl = document.getElementById('turn-order-info');
-        // if (gameState.phase === 'PLAYING' && gameState.players.length > 0) {
-        //     const n = gameState.players.length;
-        //     const upcoming = [];
-        //     for (let i = 0; i < Math.min(4, n); i++) {
-        //         const p = gameState.players[(gameState.turnIndex + i) % n];
-        //         upcoming.push(p.id === myPeerId ? 'You' : cleanPlayerName(p.name));
-        //     }
-        //     turnOrderEl.textContent = 'Order: ' + upcoming.join(' \u2192 ');
-        //     turnOrderEl.classList.add('is-visible');
-        // } else {
-        //     turnOrderEl.classList.remove('is-visible');
-        // }
     }
 
     // 3. Local Player
@@ -797,8 +784,8 @@ function loadGame(event) {
                 playerData = parsed.playerData || [];
                 
                 let allCurrentUsers = [];
-                gameState.players.forEach(p => allCurrentUsers.push({ id: p.id, name: p.name }));
-                (gameState.spectators || []).forEach(s => allCurrentUsers.push({ id: s.id, name: s.name }));
+                gameState.players.forEach(p => { if (!isDisconnected(p.id)) allCurrentUsers.push({ id: p.id, name: p.name }); });
+                (gameState.spectators || []).forEach(s => { if (!isDisconnected(s.id)) allCurrentUsers.push({ id: s.id, name: s.name }); });
                 
                 let uniqueUsers = Array.from(new Map(allCurrentUsers.map(item => [item.id, item])).values());
                 let currentPool = [...uniqueUsers];
@@ -871,6 +858,14 @@ function loadGame(event) {
                 parsed.gameState.pausedRemaining = 30000;
                 parsed.gameState.biddingDeadline = null;
                 parsed.gameState.turnDeadline = null;
+                parsed.gameState.trumpSelectionDeadline = null;
+
+                // These all refer to peer ids from the saved session, none of which mean
+                // anything now - leaving them in would show phantom "disconnected" rows or
+                // wrongly pre-exclude a freshly-matched seat in the lobby.
+                parsed.gameState.excludedIds = [];
+                parsed.gameState.disconnectedIds = [];
+                parsed.gameState.disconnectedAt = {};
 
                 gameState = parsed.gameState;
                 gameStats = parsed.gameStats || {};

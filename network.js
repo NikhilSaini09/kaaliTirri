@@ -6,6 +6,7 @@ let connections = {};
 let hostConnection = null;
 let lastSeen = {}; // peerId -> last time the host heard anything from that connection (heartbeat)
 let actionTimestamps = {}; // peerId -> recent ACTION_ message timestamps, for basic flood protection
+let pendingPromotionTarget = null; // peer id the host most recently sent PROMOTE_TO_HOST to
 
 const HEARTBEAT_INTERVAL_MS = 4000;
 const HEARTBEAT_STALE_MS = 10000;   // a couple of missed pings before we stop waiting for a clean 'close' event
@@ -45,6 +46,8 @@ function markDisconnected(peerId) {
     if (!isHost) return;
     delete connections[peerId];
     delete lastSeen[peerId];
+    delete actionTimestamps[peerId];
+    if (pendingPromotionTarget === peerId) pendingPromotionTarget = null;
 
     const known = gameState.players.some(p => p.id === peerId) ||
                   (gameState.spectators || []).some(s => s.id === peerId);
@@ -240,6 +243,12 @@ function attachHostConnectionHandler() {
             if (data.type === 'ACTION_PLAY_CARD') { handlePlayCard(conn.peer, data.card); broadcastState(); }
 
             if (data.type === 'PROMOTION_READY') {
+                // Only honor this from the specific peer we ourselves promoted - without this
+                // check, ANY connected client could send this message unprompted and get
+                // everyone (including the real host) redirected to reconnect to them.
+                if (conn.peer !== pendingPromotionTarget) return;
+                pendingPromotionTarget = null;
+
                 // conn.peer just finished setting itself up as the new host - tell everyone
                 // else where to reconnect, then step down and reconnect ourselves.
                 Object.keys(connections).forEach(id => {
@@ -268,6 +277,7 @@ function promoteToHost(targetId) {
     if (mePlayer) mePlayer.name = mePlayer.name.replace(' (Host)', '').trim();
     targetPlayer.name = targetPlayer.name.replace(' (Host)', '').trim() + ' (Host)';
 
+    pendingPromotionTarget = targetId;
     conn.send({ type: 'PROMOTE_TO_HOST', state: gameState, gameStats: gameStats, playerData: playerData });
 }
 

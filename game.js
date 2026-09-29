@@ -42,6 +42,7 @@ let gameState = {
     disconnectedIds: [],
     biddingDeadline: null,
     turnDeadline: null,
+    trumpSelectionDeadline: null,
     isPaused: false,
     pausedRemaining: null
 };
@@ -301,6 +302,7 @@ function startDeal() {
 
     gameState.biddingDeadline = null;
     gameState.turnDeadline = null;
+    gameState.trumpSelectionDeadline = null;
     gameState.isPaused = false;
     gameState.pausedRemaining = null;
 
@@ -312,6 +314,12 @@ function startDeal() {
 
     gameState.players.forEach(p => sortHand(p.hand));
     gameState.phase = 'BIDDING';
+}
+
+function enterTrumpSelection() {
+    gameState.phase = 'TRUMP_SELECTION';
+    gameState.biddingDeadline = null;
+    gameState.trumpSelectionDeadline = Date.now() + BIDDING_TIME_MS;
 }
 
 function handlePlaceBid(playerId, amount) {
@@ -334,8 +342,7 @@ function handlePlaceBid(playerId, amount) {
 
         const activePlayers = gameState.players.filter(p => !p.hasFolded);
         if (activePlayers.length === 1 || amt === MAX_BID) {
-            gameState.phase = 'TRUMP_SELECTION';
-            gameState.biddingDeadline = null;
+            enterTrumpSelection();
         }
         return { success: true };
     }
@@ -357,8 +364,7 @@ function handleFold(playerId) {
         return;
     }
     if (activePlayers.length === 1 && gameState.highestBid.playerId !== null) {
-        gameState.phase = 'TRUMP_SELECTION';
-        gameState.biddingDeadline = null;
+        enterTrumpSelection();
     }
 }
 
@@ -377,15 +383,14 @@ function checkBiddingTimeout() {
         if (active.length === 0) { startDeal(); broadcastState(); return; }
         const randomPlayer = active[Math.floor(Math.random() * active.length)];
         gameState.highestBid = { playerId: randomPlayer.id, amount: MIN_BID, playerName: randomPlayer.name };
-        gameState.phase = 'TRUMP_SELECTION';
+        enterTrumpSelection();
     } else {
         gameState.players.forEach(p => {
             if (p.id !== gameState.highestBid.playerId && !p.hasFolded) p.hasFolded = true;
         });
-        gameState.phase = 'TRUMP_SELECTION';
+        enterTrumpSelection();
     }
 
-    gameState.biddingDeadline = null;
     broadcastState();
 }
 
@@ -420,6 +425,44 @@ function checkTurnTimeout() {
 
 setInterval(checkTurnTimeout, 1000);
 
+function autoResolveTrumpSelection() {
+    gameState.trumpSelectionDeadline = null;
+    const bidderId = gameState.highestBid.playerId;
+    const bidderIndex = gameState.players.findIndex(p => p.id === bidderId);
+    if (bidderIndex === -1) {
+        // The bid winner isn't even in the game anymore (e.g. kicked) - nothing sane to
+        // resolve, so just start a fresh deal rather than leaving everyone stuck.
+        startDeal();
+        return;
+    }
+    const randomSuit = suits[Math.floor(Math.random() * suits.length)];
+    const allowedCards = Math.floor((gameState.players.length - 2) / 2);
+    const randomCalled = [];
+    for (let i = 0; i < allowedCards; i++) {
+        const v = values[Math.floor(Math.random() * values.length)];
+        const s = suits[Math.floor(Math.random() * suits.length)];
+        randomCalled.push(`${v}${s}`);
+    }
+    handleSetTrump(bidderId, randomSuit, randomCalled);
+}
+
+function checkTrumpSelectionTimeout() {
+    if (!isHost) return;
+    if (gameState.isPaused) return;
+    if (gameState.phase !== 'TRUMP_SELECTION') return;
+
+    const bidderId = gameState.highestBid.playerId;
+    const bidderDisconnected = bidderId && (gameState.disconnectedIds || []).includes(bidderId);
+    const timedOut = gameState.trumpSelectionDeadline && Date.now() >= gameState.trumpSelectionDeadline;
+
+    if (bidderDisconnected || timedOut) {
+        autoResolveTrumpSelection();
+        broadcastState();
+    }
+}
+
+setInterval(checkTrumpSelectionTimeout, 1000);
+
 function togglePause() {
     if (!isHost) return;
 
@@ -453,6 +496,7 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
 
     gameState.trumpSuit = suit;
+    gameState.trumpSelectionDeadline = null;
 
     const allowedCards = Math.floor((gameState.players.length - 2) / 2);
     gameState.calledCards = [...calledCardsArray].slice(0, allowedCards);

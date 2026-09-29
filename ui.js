@@ -216,6 +216,14 @@ let bidPanelWasOpen = false;
 let bidAmountEditedByUser = false;
 let hasAutoFocusedBidOnce = false;
 
+// Full teardown-and-rebuild every render (which used to happen on literally every state
+// broadcast - someone else bidding, folding, anything) retriggers every element's CSS
+// entrance animation and drops hover/transition state, which reads as constant "flicker".
+// These track what was actually rendered last time so unchanged parts can be left alone.
+let lastHandIds = null;
+let boardCardCache = {}; // card.id -> { el, rotation }
+let lastOppSignature = null;
+
 function renderGameBoard() {
     const myArea = document.getElementById('my-area');
     const boardArea = document.getElementById('center-board');
@@ -231,7 +239,6 @@ function renderGameBoard() {
     const timerWrap = document.getElementById('timer-bar-wrap');
     const foldBanner = document.getElementById('fold-banner');
 
-    myArea.innerHTML = ''; boardArea.innerHTML = ''; oppArea.innerHTML = '';
     document.getElementById('phase-display').innerHTML = `Phase: <span class="phase-label">${PHASE_LABELS[gameState.phase] || gameState.phase}</span>`;
     hostControls.style.display = isHost ? 'block' : 'none';
 
@@ -330,14 +337,28 @@ function renderGameBoard() {
         });
     }
 
-    // 1. Center Board
+    // 1. Center Board - keyed by card id so a new card fades in on its own without
+    // disturbing (and re-animating) the cards already sitting on the table.
     const winningCard = getCurrentWinningCard(gameState.board, gameState.trumpSuit);
+    const boardIdsNow = new Set(gameState.board.map(c => c.id));
+    Object.keys(boardCardCache).forEach(id => {
+        if (!boardIdsNow.has(id)) {
+            boardCardCache[id].el.remove();
+            delete boardCardCache[id];
+        }
+    });
     gameState.board.forEach((card) => {
-        const cardEl = createCardElement(card, false);
-        cardEl.classList.add('played-card');
-        if (winningCard && card.id === winningCard.id) cardEl.classList.add('is-winning-card');
-        const rotation = (Math.random() * 12 - 6);
-        cardEl.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
+        let entry = boardCardCache[card.id];
+        if (!entry) {
+            const cardEl = createCardElement(card, false);
+            cardEl.classList.add('played-card');
+            const rotation = (Math.random() * 12 - 6); // pick once, keep for the card's lifetime on the table
+            entry = { el: cardEl, rotation };
+            boardCardCache[card.id] = entry;
+            boardArea.appendChild(cardEl);
+        }
+        entry.el.classList.toggle('is-winning-card', !!(winningCard && card.id === winningCard.id));
+        entry.el.style.transform = `translate(-50%, -50%) rotate(${entry.rotation}deg)`;
 
         const CARD_R = isMobile ? 32 : 30;
         let leftPct = 50, topPct = 50;
@@ -348,13 +369,25 @@ function renderGameBoard() {
             leftPct = 50 + Math.cos(ang) * CARD_R;
             topPct = 50 + Math.sin(ang) * CARD_R;
         }
-        cardEl.style.left = `${leftPct}%`;
-        cardEl.style.top = `${topPct}%`;
-        boardArea.appendChild(cardEl);
+        entry.el.style.left = `${leftPct}%`;
+        entry.el.style.top = `${topPct}%`;
     });
 
-    // 2. Opponents
-    opponents.forEach((player) => {
+    // 2. Opponents - skip the rebuild entirely when nothing shown here actually changed
+    // (e.g. someone else placing a bid doesn't touch any opponent's hand/points/turn/fold state).
+    const oppSignature = JSON.stringify({
+        isMobile, dense,
+        list: opponents.map(p => [
+            p.id, p.hand.length, p.points, p.team, !!p.hasFolded,
+            p.wonCards ? p.wonCards.length : 0,
+            activeTurnPlayer && activeTurnPlayer.id === p.id,
+            !isMobile ? seatPos[p.id] : null
+        ])
+    });
+    if (oppSignature !== lastOppSignature) {
+        lastOppSignature = oppSignature;
+        oppArea.innerHTML = '';
+        opponents.forEach((player) => {
         const oppDiv = document.createElement('div');
         oppDiv.className = 'opponent-container' + (isMobile ? ' compact' : '') + (dense ? ' dense' : '');
 
@@ -405,7 +438,8 @@ function renderGameBoard() {
         }
 
         oppArea.appendChild(oppDiv);
-    });
+        });
+    }
 
     const tableZoneEl = document.querySelector('.table-zone');
     tableZoneEl.style.paddingTop = isMobile ? `${Math.max(84, oppArea.offsetHeight + 28)}px` : '';
@@ -435,10 +469,15 @@ function renderGameBoard() {
     const me = gameState.players.find(p => p.id === myPeerId);
     if (me) {
         const isMyTurn = activeTurnPlayer && activeTurnPlayer.id === me.id;
+
+        // Status row (turn badge / won-pile) is cheap to rebuild and must stay first in DOM
+        // order - only the card wrappers below get the more careful diffing.
+        const oldStatusRow = myArea.querySelector('.my-status-row');
+        if (oldStatusRow) oldStatusRow.remove();
         const statusRow = document.createElement('div');
         statusRow.className = 'my-status-row';
-        myArea.appendChild(statusRow);
-        
+        myArea.insertBefore(statusRow, myArea.firstChild);
+
         if (isMyTurn) {
             const badge = document.createElement('div');
             badge.className = 'your-turn-badge';
@@ -446,20 +485,43 @@ function renderGameBoard() {
             statusRow.appendChild(badge);
         }
 
-        me.hand.forEach((card, index) => {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'my-card-wrapper';
-            wrapper.style.zIndex = index;
+        // Only rebuild the hand when the actual set of cards changed (you played one, or a
+        // fresh deal) - someone else bidding/folding/playing shouldn't touch your cards at
+        // all, which is what was making them visibly flash on every unrelated action before.
+        const currentHandIds = me.hand.map(c => c.id).join('|');
+        if (currentHandIds !== lastHandIds) {
+            myArea.querySelectorAll('.my-card-wrapper').forEach(el => el.remove());
+            me.hand.forEach((card, index) => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'my-card-wrapper';
+                wrapper.dataset.cardId = card.id;
+                wrapper.style.zIndex = index;
 
+                const cardEl = createCardElement(card, false);
+                cardEl.addEventListener('click', () => {
+                    if (wrapper.classList.contains('is-playable')) requestPlayCard(card);
+                });
+
+                wrapper.appendChild(cardEl);
+                myArea.appendChild(wrapper);
+            });
+            lastHandIds = currentHandIds;
+        }
+
+        // Playability (and sizing) can change even when the cards themselves didn't - e.g.
+        // the led suit gets set by whoever plays first - so this always re-applies, but it's
+        // just a style/class toggle on the existing elements, never a rebuild.
+        const cardWrappers = myArea.querySelectorAll('.my-card-wrapper');
+        cardWrappers.forEach(wrapper => {
+            const card = me.hand.find(c => c.id === wrapper.dataset.cardId);
+            const cardEl = wrapper.querySelector('.card');
+            if (!card || !cardEl) return;
             const playable = isCardPlayable(myPeerId, card);
-            const cardEl = createCardElement(card, true, playable);
-            if (playable) cardEl.addEventListener('click', () => requestPlayCard(card));
-
-            wrapper.appendChild(cardEl);
-            myArea.appendChild(wrapper);
+            wrapper.classList.toggle('is-playable', playable);
+            cardEl.style.opacity = playable ? '' : '0.5';
+            cardEl.style.cursor = playable ? 'pointer' : 'not-allowed';
         });
 
-        const cardWrappers = myArea.querySelectorAll('.my-card-wrapper');
         if (cardWrappers.length > 0) {
             const cardCount = cardWrappers.length;
             const gap = 8;
@@ -567,6 +629,15 @@ function renderGameBoard() {
 
         actionOverlay.style.display = showOverlay ? 'flex' : 'none';
         actionOverlay.classList.toggle('no-dim', gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
+    } else {
+        // Spectator (or excluded from this game) - nothing above ran, so clear out anything
+        // left behind from when this browser last had a hand of its own.
+        if (lastHandIds !== null) {
+            myArea.innerHTML = '';
+            lastHandIds = null;
+        }
+        foldBanner.style.display = 'none';
+        actionOverlay.style.display = 'none';
     }
 
     // 4. Game Over Modal

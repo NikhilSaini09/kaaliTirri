@@ -215,6 +215,7 @@ let previousBoardLength = null;
 let bidPanelWasOpen = false;
 let bidAmountEditedByUser = false;
 let hasAutoFocusedBidOnce = false;
+let trumpPanelWasOpen = false;
 
 // Full teardown-and-rebuild every render (which used to happen on literally every state
 // broadcast - someone else bidding, folding, anything) retriggers every element's CSS
@@ -602,28 +603,36 @@ function renderGameBoard() {
                 showOverlay = true;
                 trumpPanel.style.display = 'flex';
 
-                teamCardsContainer.innerHTML = '';
-                let allowedCards = Math.floor((gameState.players.length - 2) / 2);
-                for (let i = 0; i < allowedCards; i++) {
-                    const selectorDiv = document.createElement('div');
+                // Only build the partner-card selects once per turn - an unrelated broadcast
+                // (e.g. a spectator joining mid-selection) used to wipe out whatever the
+                // bidder had already picked by rebuilding these every single render.
+                if (!trumpPanelWasOpen) {
+                    teamCardsContainer.innerHTML = '';
+                    let allowedCards = Math.floor((gameState.players.length - 2) / 2);
+                    for (let i = 0; i < allowedCards; i++) {
+                        const selectorDiv = document.createElement('div');
 
-                    const rankSelect = document.createElement('select');
-                    rankSelect.className = 'team-rank-select';
-                    rankSelect.id = `team-rank-${i}`;
-                    rankSelect.name = `team-rank-${i}`;
-                    rankSelect.setAttribute('aria-label', `Partner card ${i + 1} rank`);
-                    values.forEach(v => rankSelect.appendChild(new Option(v, v)));
+                        const rankSelect = document.createElement('select');
+                        rankSelect.className = 'team-rank-select';
+                        rankSelect.id = `team-rank-${i}`;
+                        rankSelect.name = `team-rank-${i}`;
+                        rankSelect.setAttribute('aria-label', `Partner card ${i + 1} rank`);
+                        values.forEach(v => rankSelect.appendChild(new Option(v, v)));
 
-                    const suitSelect = document.createElement('select');
-                    suitSelect.className = 'team-suit-select';
-                    suitSelect.id = `team-suit-${i}`;
-                    suitSelect.name = `team-suit-${i}`;
-                    suitSelect.setAttribute('aria-label', `Partner card ${i + 1} suit`);
-                    suits.forEach(s => suitSelect.appendChild(new Option(s, s)));
+                        const suitSelect = document.createElement('select');
+                        suitSelect.className = 'team-suit-select';
+                        suitSelect.id = `team-suit-${i}`;
+                        suitSelect.name = `team-suit-${i}`;
+                        suitSelect.setAttribute('aria-label', `Partner card ${i + 1} suit`);
+                        suits.forEach(s => suitSelect.appendChild(new Option(s, s)));
 
-                    selectorDiv.appendChild(rankSelect); selectorDiv.appendChild(suitSelect);
-                    teamCardsContainer.appendChild(selectorDiv);
+                        selectorDiv.appendChild(rankSelect); selectorDiv.appendChild(suitSelect);
+                        teamCardsContainer.appendChild(selectorDiv);
+                    }
+                    trumpPanelWasOpen = true;
                 }
+            } else {
+                trumpPanelWasOpen = false;
             }
         }
 

@@ -145,43 +145,49 @@ function isCardPlayable(playerId, card) {
 
 function handlePlayCard(playerId, playedCard) {
     if (gameState.isPaused) return;
-    if (!isCardPlayable(playerId, playedCard)) return;
+    if (!playedCard || !playedCard.id) return;
 
     const playerIndex = gameState.players.findIndex(p => p.id === playerId);
     if (playerIndex === -1) return;
     const player = gameState.players[playerIndex];
-    
+
     const cardIndex = player.hand.findIndex(c => c.id === playedCard.id);
-    if (cardIndex !== -1) {
-        const [card] = player.hand.splice(cardIndex, 1);
-        card.playedBy = playerId; 
-        gameState.board.push(card);
-        
-        const cardStr = `${card.value}${card.suit}`;
-        if (gameState.calledCards.includes(cardStr)) {
-            player.team = 'BIDDER_TEAM';
-            gameState.calledCards = gameState.calledCards.filter(c => c !== cardStr);
+    if (cardIndex === -1) return; // not actually in this player's hand
 
-            if (gameState.calledCards.length === 0) {
-                gameState.players.forEach(p => {
-                    if (p.team === 'UNKNOWN') {
-                        p.team = 'DEFENDER_TEAM';
-                    }
-                });
-            }
-        }
+    // Validate using OUR record of the card, never the client-supplied one - otherwise a
+    // modified client could claim a trump card's suit matches the lead suit (bypassing the
+    // follow-suit rule) while still having the real trump card looked up and played below.
+    const realCard = player.hand[cardIndex];
+    if (!isCardPlayable(playerId, realCard)) return;
 
-        if (gameState.board.length === gameState.players.length) {
-            gameState.phase = 'TRICK_EVALUATION';
-            gameState.turnDeadline = null;
-            setTimeout(() => {
-                evaluateTrick();
-                broadcastState();
-            }, 2000);
-        } else {
-            gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
-            resetTurnTimer();
+    const [card] = player.hand.splice(cardIndex, 1);
+    card.playedBy = playerId; 
+    gameState.board.push(card);
+    
+    const cardStr = `${card.value}${card.suit}`;
+    if (gameState.calledCards.includes(cardStr)) {
+        player.team = 'BIDDER_TEAM';
+        gameState.calledCards = gameState.calledCards.filter(c => c !== cardStr);
+
+        if (gameState.calledCards.length === 0) {
+            gameState.players.forEach(p => {
+                if (p.team === 'UNKNOWN') {
+                    p.team = 'DEFENDER_TEAM';
+                }
+            });
         }
+    }
+
+    if (gameState.board.length === gameState.players.length) {
+        gameState.phase = 'TRICK_EVALUATION';
+        gameState.turnDeadline = null;
+        setTimeout(() => {
+            evaluateTrick();
+            broadcastState();
+        }, 2000);
+    } else {
+        gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
+        resetTurnTimer();
     }
 }
 
@@ -491,16 +497,27 @@ function togglePause() {
     broadcastState();
 }
 
+function isValidCardCode(code) {
+    if (typeof code !== 'string' || code.length < 2) return false;
+    const suit = code.slice(-1);
+    const value = code.slice(0, -1);
+    return suits.includes(suit) && values.includes(value);
+}
+
 function handleSetTrump(playerId, suit, calledCardsArray) {
     if (gameState.isPaused) return;
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
+    if (!suits.includes(suit)) return; // reject anything but a real suit - these two fields get
+                                        // rendered unescaped on every client, so this also closes
+                                        // a stored-XSS hole a modified client could otherwise use
+    const cleanCalled = (Array.isArray(calledCardsArray) ? calledCardsArray : []).filter(isValidCardCode);
 
     gameState.trumpSuit = suit;
     gameState.trumpSelectionDeadline = null;
 
     const allowedCards = Math.floor((gameState.players.length - 2) / 2);
-    gameState.calledCards = [...calledCardsArray].slice(0, allowedCards);
-    gameState.originalCalledCards = [...calledCardsArray];
+    gameState.calledCards = cleanCalled.slice(0, allowedCards);
+    gameState.originalCalledCards = cleanCalled;
     
     const bidderIndex = gameState.players.findIndex(p => p.id === playerId);
     gameState.players[bidderIndex].team = 'BIDDER_TEAM';

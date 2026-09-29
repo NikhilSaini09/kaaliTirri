@@ -102,7 +102,8 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         conn.on('data', (data) => {
             if (data.type === 'LEAVE') { markDisconnected(conn.peer); return; }
             if (data.type === 'JOIN_LOBBY') {
-                const finalName = data.name.trim();
+                let finalName = (data.name || '').trim();
+                if (!finalName) return; // malformed/empty name - ignore rather than crash below
 
                 if (typeof playerData !== 'undefined' && playerData && playerData.length > 0) {
                     const entry = playerData.find(pd => pd.code === finalName);
@@ -151,13 +152,13 @@ document.getElementById('hostBtn').addEventListener('click', () => {
                         return;
                     }
 
-                    const dcIndex = (gameState.disconnectedIds || []).findIndex(dcId => {
+                    const dcPlayerIndex = (gameState.disconnectedIds || []).findIndex(dcId => {
                         const pl = gameState.players.find(p => p.id === dcId);
                         return pl && pl.name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '').trim() === finalName;
                     });
 
-                    if (dcIndex !== -1) {
-                        const oldId = gameState.disconnectedIds.splice(dcIndex, 1)[0];
+                    if (dcPlayerIndex !== -1) {
+                        const oldId = gameState.disconnectedIds.splice(dcPlayerIndex, 1)[0];
                         const player = gameState.players.find(p => p.id === oldId);
                         if (player) {
                             player.id = conn.peer;
@@ -167,11 +168,31 @@ document.getElementById('hostBtn').addEventListener('click', () => {
                             return;
                         }
                     }
+
+                    // Same idea for a spectator who dropped and is now rejoining - without this
+                    // they'd come back as a brand-new spectator row while their old disconnected
+                    // one sits there forever as an unremovable ghost entry in the lobby list.
+                    const dcSpecIndex = (gameState.disconnectedIds || []).findIndex(dcId => {
+                        const sp = (gameState.spectators || []).find(s => s.id === dcId);
+                        return sp && sp.name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '').trim() === finalName;
+                    });
+
+                    if (dcSpecIndex !== -1) {
+                        const oldId = gameState.disconnectedIds.splice(dcSpecIndex, 1)[0];
+                        const spectator = (gameState.spectators || []).find(s => s.id === oldId);
+                        if (spectator) {
+                            spectator.id = conn.peer;
+                            broadcastState();
+                            return;
+                        }
+                    }
                 }
 
                 if (gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
                     gameState.spectators.push({ id: conn.peer, name: finalName + " (Spectator)" });
-                    conn.send({ type: 'STATE_UPDATE', state: gameState, isSpectator: true });
+                    // NB: don't also send the raw gameState here - it's unsanitized (every
+                    // player's hand in full) and broadcastState() below already delivers this
+                    // connection a properly sanitized copy a moment later.
                 } else {
                     gameState.players.push({ id: conn.peer, name: finalName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
                 }

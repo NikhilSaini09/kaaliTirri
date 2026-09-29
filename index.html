@@ -172,23 +172,34 @@
         </div>
         <div class="page-modal-body">
             <h4>The Deck &amp; Scoring</h4>
-            <p>A standard 52-card deck. Card points: <b>A, K, Q, J, 10</b> = 10 pts each &middot; <b>5</b> = 5 pts &middot; <b>3♠ (Kaali Tirri)</b> = 30 pts &middot; everything else = 0 pts. Max possible: 250 pts.</p>
-            <p>Rank, low to high: 2 3 4 5 6 7 8 9 10 J Q K A.</p>
+            <p>A standard 52-card deck, dealt evenly to every seated player (any leftover cards are set aside unused). Rank, low to high: 2 3 4 5 6 7 8 9 10 J Q K A.</p>
+            <p>Card points: <b>A, K, Q, J, 10</b> = 10 pts each &middot; <b>5</b> = 5 pts &middot; <b>3♠ ("Kaali Tirri")</b> = 30 pts &middot; everything else = 0 pts. Maximum possible in play: 250 pts.</p>
             <hr>
-            <h4>Deal &amp; Bidding</h4>
-            <p>Cards are dealt evenly to every seated player. Bidding then opens: raise in multiples of 5 (130&ndash;250) or fold. Highest bidder (or whoever hits 250 first) becomes the <b>Bid Winner</b>. If nobody bids before the timer runs out, a random player is assigned 130 pts.</p>
+            <h4>Bidding</h4>
+            <p>After the deal, bidding opens: raise in multiples of 5 between <b>130</b> and <b>250</b>, or fold. Whoever bids highest (or hits 250 first) becomes the <b>Bid Winner</b> and sets the terms for the hand.</p>
+            <p>Bidding has a 30-second clock once the first bid lands - if nobody bids in time, a random player is handed the win at 130 pts. If the clock runs out mid-bidding, everyone who hasn't matched the current high bid is folded automatically.</p>
             <hr>
             <h4>Trump &amp; Secret Teams</h4>
-            <p>The Bid Winner picks a <b>Trump suit</b> and calls one or more <b>partner cards</b> (the number scales with player count). Whoever holds a called card is secretly on the Bidder's team — nobody finds out until that card is actually played.</p>
+            <p>The Bid Winner picks a <b>trump suit</b> and calls one or more <b>partner cards</b> by rank and suit (the number allowed scales with player count). Whoever holds a called card is secretly on the Bidder's team - including possibly the Bid Winner's own hand.</p>
+            <p>Nobody finds out who's on which team until a called card is actually played to the table. Anyone not on the Bidder's team by the end is a <b>Defender</b>.</p>
             <hr>
             <h4>Playing a Trick</h4>
-            <p>The Bid Winner leads the first trick; whoever wins a trick leads the next. Follow the led suit if you can. If you can't, play any card — trump or otherwise. Highest card of the led suit wins, unless a trump is played, in which case the highest trump wins.</p>
+            <p>The Bid Winner leads the first trick; whoever wins a trick leads the next. Follow the led suit if you're able to. If you can't, play anything - trump or otherwise. Highest card of the led suit wins the trick, unless someone plays trump, in which case the highest trump wins instead.</p>
+            <p>Each trick's points go to whoever wins it, and the cards move into that player's <b>Won Pile</b> - click any won pile to see exactly what's in it.</p>
+            <p>You get 30 seconds per turn. Run out the clock and the game auto-plays a legal card on your behalf, so nobody can stall the table.</p>
             <hr>
             <h4>Winning the Round</h4>
-            <p>Trick points go to whoever wins each trick. At the end, if the Bidder's team's total meets or beats the bid amount, they win — otherwise the Defenders do.</p>
+            <p>Once every card has been played, team totals are added up. If the Bidder's team meets or beats the bid amount, they win the round; otherwise the Defenders take it.</p>
             <hr>
-            <h4>Table Tips</h4>
-            <p>30 seconds per turn — an idle player gets a card auto-played for them. The host can pause, reorder seats, add CPU players, hand the host role to someone else, and save/load the game mid-session.</p>
+            <h4>CPU Players</h4>
+            <p>Short a few people? The host can add CPU-controlled seats from the waiting room. CPUs bid based on their own hand strength, choose trump and partner cards sensibly when they win the bid, and play every card using a fairness-respecting strategy that only ever looks at their own hand and what's already been publicly played - never at anyone else's cards.</p>
+            <p>That same logic is what steps in for a human player automatically if they let their turn clock run out.</p>
+            <hr>
+            <h4>Reconnecting</h4>
+            <p>Lost your connection or closed the tab mid-hand? Rejoin with the same name (or access code, if the host set one up) and you'll seamlessly reclaim your seat, cards and all. A short grace period protects a disconnected seat before the game auto-plays for it.</p>
+            <hr>
+            <h4>Host Tools</h4>
+            <p>The host's gear menu can pause the whole table, re-deal, save the game to a file and reload it later, and hand host duties to another player. In the waiting room, the host can tick/untick who's actually seated for the next hand (everyone else spectates) and reorder the turn cycle.</p>
         </div>
     </div>
 

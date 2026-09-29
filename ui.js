@@ -246,6 +246,7 @@ let hasAutoFocusedBidOnce = false;
 let trumpPanelWasOpen = false;
 
 let lastHandIds = null;
+const prefersReducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 let boardCardCache = {};
 let lastOppSignature = null;
 
@@ -379,11 +380,38 @@ function renderGameBoard() {
         if (!entry) {
             const cardEl = createCardElement(card, false);
             cardEl.classList.add('played-card');
-            // One-shot entrance animation - CSS animations on a class that's never removed
-            // only ever play once (when the element is first inserted), so no cleanup needed.
             const isKaaliTirri = card.value === '3' && card.suit === '♠';
-            cardEl.classList.add(isKaaliTirri ? 'is-kaali-tirri' : 'is-entering');
             const rotation = (Math.random() * 12 - 6); // pick once, keep for the card's lifetime on the table
+
+            if (isKaaliTirri) {
+                // Its own self-contained spin/glow flourish - the highest-value card in the
+                // game deserves a bigger moment than a normal play.
+                cardEl.classList.add('is-kaali-tirri');
+            } else {
+                // Cheap directional "fly in from the player's seat" - a couple of standalone
+                // CSS properties (translate/scale) transitioned once on insert, layered on top
+                // of (not fighting) the positional `transform` set below.
+                let dx = 0, dy = 46;
+                if (card.playedBy !== myPeerId && seatAngle[card.playedBy] !== undefined) {
+                    const ang = seatAngle[card.playedBy];
+                    dx = Math.cos(ang) * 46;
+                    dy = Math.sin(ang) * 46;
+                }
+                if (prefersReducedMotion) {
+                    cardEl.style.opacity = '1';
+                } else {
+                    cardEl.style.translate = `${dx}px ${dy}px`;
+                    cardEl.style.scale = '0.5';
+                    cardEl.style.opacity = '0';
+                    requestAnimationFrame(() => {
+                        cardEl.style.transition = 'translate 0.32s cubic-bezier(.22,.75,.3,1.1), scale 0.32s cubic-bezier(.22,.75,.3,1.1), opacity 0.22s ease';
+                        cardEl.style.translate = '0px 0px';
+                        cardEl.style.scale = '1';
+                        cardEl.style.opacity = '1';
+                    });
+                }
+            }
+
             entry = { el: cardEl, rotation };
             boardCardCache[card.id] = entry;
             boardArea.appendChild(cardEl);

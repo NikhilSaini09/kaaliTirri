@@ -78,8 +78,9 @@ Players have 30 seconds to play a card. If the timer expires, the engine automat
 * **Host-Controlled Seating & Order:** In the waiting room, the host can tick/untick players to assign them to active play or spectator status. The host can also manually reorder the turn cycle using arrow controls.
 * **Code-Based Join & Seamless Reconnection:** Supports a `playerData` array to map secret codes to names. If a player gets disconnected or closes their tab, they can re-enter their code in a new window to seamlessly override their dead connection and jump right back into their seat mid-hand. Disconnected players are skipped instantly during trick evaluation to prevent game stalls.
 * **Dynamic Save/Load State:** Games can be paused, saved as a JSON file, and restored later. The loading engine dynamically remaps live network IDs to the saved player data, preserving exact turn orders and shunting overflow players into the spectator pool.
-* **Quality of Life (Audio & UI):** Features native Web Audio API sound cues for card plays, turn notifications, and 5-second countdown warnings.
+* **Quality of Life (Audio & UI):** Features native Web Audio API sound cues for card plays, turn notifications, and 5-second countdown warnings — heard by every player at the table, not just the one acting. A glowing highlight marks both whoever's turn it is and, mid-trick, whichever played card is currently winning it.
 * **Persistent Statistics:** Tracks career wins, losses, total games played, and win rates across sessions using the save file ledger.
+* **Sanitized Display Names:** Names are escaped before being rendered, so a player can't smuggle HTML/script through their display name into everyone else's browser.
 
 ## Architecture
 

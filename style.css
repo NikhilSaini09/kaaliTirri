@@ -715,6 +715,14 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     opacity: 0.5;
     filter: grayscale(0.6);
 }
+
+/* Glows around whichever played card is currently winning the trick, live as it's
+   still being played out - the same visual language as the active-turn glow. */
+.is-winning-card {
+    box-shadow: 0 0 0 2px rgba(236,208,138,0.4), 0 0 18px rgba(236,208,138,0.7) !important;
+    animation: turn-pulse 1.6s ease-in-out infinite;
+    z-index: 5;
+}
 .fold-tag {
     font-size: 10px;
     font-weight: 800;
@@ -728,6 +736,8 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 @media (prefers-reduced-motion: reduce) {
     .is-active-turn { animation: none; }
+    .is-winning-card { animation: none; }
+    .card { animation: none; }
 }
 
 .your-turn-badge {
@@ -760,7 +770,12 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 .my-card-wrapper:hover { transform: translateY(-10px); z-index: 100 !important; }
 .my-card-wrapper .card { transition: width 0.15s ease, height 0.15s ease, font-size 0.15s ease; }
 
+@keyframes card-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
 .card {
+    animation: card-fade-in 0.18s ease;
     width: 65px;
     height: 95px;
     background: var(--ivory);

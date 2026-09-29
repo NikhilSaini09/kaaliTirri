@@ -123,6 +123,22 @@ function renderLobby() {
             controls.appendChild(up);
             controls.appendChild(down);
 
+            const isEligibleForHost = member.id !== myPeerId && !isGone &&
+                gameState.players.some(p => p.id === member.id); // active players only, not spectators
+            if (isEligibleForHost) {
+                const makeHost = document.createElement('button');
+                makeHost.className = 'btn-wood';
+                makeHost.style.cssText = 'padding: 5px 10px; font-size: 13px;';
+                makeHost.textContent = '👑 Host';
+                makeHost.title = `Make ${cleanPlayerName(member.name)} the host`;
+                makeHost.addEventListener('click', () => {
+                    if (confirm(`Make ${cleanPlayerName(member.name)} the new host? You will become a regular player.`)) {
+                        promoteToHost(member.id);
+                    }
+                });
+                controls.appendChild(makeHost);
+            }
+
             if (member.id !== myPeerId) {
                 const kick = document.createElement('button');
                 kick.className = 'btn-danger';
@@ -464,6 +480,20 @@ function renderGameBoard() {
             }
             document.getElementById('trump-info').innerHTML = trumpHtml;
         }
+
+        // const turnOrderEl = document.getElementById('turn-order-info');
+        // if (gameState.phase === 'PLAYING' && gameState.players.length > 0) {
+        //     const n = gameState.players.length;
+        //     const upcoming = [];
+        //     for (let i = 0; i < Math.min(4, n); i++) {
+        //         const p = gameState.players[(gameState.turnIndex + i) % n];
+        //         upcoming.push(p.id === myPeerId ? 'You' : cleanPlayerName(p.name));
+        //     }
+        //     turnOrderEl.textContent = 'Order: ' + upcoming.join(' \u2192 ');
+        //     turnOrderEl.classList.add('is-visible');
+        // } else {
+        //     turnOrderEl.classList.remove('is-visible');
+        // }
     }
 
     // 3. Local Player

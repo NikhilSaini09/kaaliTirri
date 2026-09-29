@@ -367,6 +367,21 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 #game-info span#trump-info b { font-size: 18px; }
 
+/* #game-info span#turn-order-info {
+    margin-left: 10px;
+    border-left: 1px solid rgba(255,255,255,0.25);
+    padding-left: 10px;
+    display: none;
+    font-size: 13px;
+    opacity: 0.9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 46vw;
+    vertical-align: middle;
+}
+#game-info span#turn-order-info.is-visible { display: inline-block; } */
+
 .trump-suit-display {
     font-size: 26px;
     line-height: 1;
@@ -966,6 +981,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     #host-dropdown { top: 40px; }
     #game-info { order: 3; flex-basis: 100%; justify-content: center; flex-wrap: wrap; gap: 2px 8px; border-radius: 18px; padding: 4px 12px; text-align: center; }
     #game-info span#trump-info { margin-left: 0; border-left: none; padding-left: 0; }
+    /* #game-info span#turn-order-info { margin-left: 0; border-left: none; padding-left: 0; max-width: 90vw; } */
     .chip { padding: 6px 12px; font-size: 12px; }
     #game-info { font-size: 12px; }
     .trump-suit-display { font-size: 20px; }

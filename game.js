@@ -24,6 +24,7 @@ const MIN_BID = 130;
 const MAX_BID = 250;
 const BIDDING_TIME_MS = 30000;
 const TURN_TIME_MS = 30000;
+const RECONNECT_GRACE_MS = 5000; // how long a disconnected player's turn is held open before we auto-play/auto-resolve for them
 
 let gameState = {
     phase: 'LOBBY',       // LOBBY, BIDDING, TRUMP_SELECTION, PLAYING, TRICK_EVALUATION, GAMEOVER
@@ -40,6 +41,7 @@ let gameState = {
     excludedIds: [],
     lobbyOrder: [],
     disconnectedIds: [],
+    disconnectedAt: {},    // id -> timestamp when marked disconnected, for the reconnect grace period
     biddingDeadline: null,
     turnDeadline: null,
     trumpSelectionDeadline: null,
@@ -68,6 +70,15 @@ function getLobbyMembers() {
 
 function isDisconnected(id) {
     return (gameState.disconnectedIds || []).includes(id);
+}
+
+// True once a disconnected player has been gone long enough that we stop waiting for them
+// (auto-play their turn / auto-resolve their trump pick) rather than holding the game open.
+function hasGraceExpired(id) {
+    if (!isDisconnected(id)) return false;
+    const at = gameState.disconnectedAt && gameState.disconnectedAt[id];
+    if (!at) return true; // no timestamp on record (e.g. an older save) - don't block on it
+    return Date.now() - at >= RECONNECT_GRACE_MS;
 }
 
 function toggleSeat(targetId) {
@@ -106,6 +117,7 @@ function applySeatSelection() {
         .map(m => ({ id: m.id, name: m.name + ' (Spectator)' }));
     gameState.lobbyOrder = members.map(m => m.id);
     gameState.disconnectedIds = [];
+    gameState.disconnectedAt = {};
     return true;
 }
 
@@ -414,9 +426,9 @@ function checkTurnTimeout() {
     const player = gameState.players[gameState.turnIndex];
     if (!player) { gameState.turnDeadline = null; return; }
 
-    const isPlayerDisconnected = (gameState.disconnectedIds || []).includes(player.id);
+    const isPlayerDisconnected = isDisconnected(player.id);
 
-    if (isPlayerDisconnected || Date.now() >= gameState.turnDeadline) {
+    if ((isPlayerDisconnected && hasGraceExpired(player.id)) || Date.now() >= gameState.turnDeadline) {
         const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
         const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
 
@@ -458,7 +470,7 @@ function checkTrumpSelectionTimeout() {
     if (gameState.phase !== 'TRUMP_SELECTION') return;
 
     const bidderId = gameState.highestBid.playerId;
-    const bidderDisconnected = bidderId && (gameState.disconnectedIds || []).includes(bidderId);
+    const bidderDisconnected = bidderId && isDisconnected(bidderId) && hasGraceExpired(bidderId);
     const timedOut = gameState.trumpSelectionDeadline && Date.now() >= gameState.trumpSelectionDeadline;
 
     if (bidderDisconnected || timedOut) {

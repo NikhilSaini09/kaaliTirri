@@ -798,8 +798,11 @@ function loadGame(event) {
                 playerData = parsed.playerData || [];
                 
                 let allCurrentUsers = [];
-                gameState.players.forEach(p => { if (!isDisconnected(p.id)) allCurrentUsers.push({ id: p.id, name: p.name }); });
-                (gameState.spectators || []).forEach(s => { if (!isDisconnected(s.id)) allCurrentUsers.push({ id: s.id, name: s.name }); });
+                // CPU seats aren't "reconnecting" anyone - they have no live connection to
+                // match against, so folding them into this pool could hand a live human's
+                // slot to a bot (or vice versa) and softlock a seat. They're restored as-is below.
+                gameState.players.forEach(p => { if (!p.isCPU && !isDisconnected(p.id)) allCurrentUsers.push({ id: p.id, name: p.name }); });
+                (gameState.spectators || []).forEach(s => { if (!s.isCPU && !isDisconnected(s.id)) allCurrentUsers.push({ id: s.id, name: s.name }); });
                 
                 let uniqueUsers = Array.from(new Map(allCurrentUsers.map(item => [item.id, item])).values());
                 let currentPool = [...uniqueUsers];
@@ -808,8 +811,14 @@ function loadGame(event) {
                 
                 let newPlayers = new Array(parsed.gameState.players.length).fill(null);
 
+                // CPU seats are restored exactly as saved - no reconnection needed.
+                parsed.gameState.players.forEach((savedPlayer, index) => {
+                    if (savedPlayer.isCPU) newPlayers[index] = savedPlayer;
+                });
+
                 // PASS 1: Robust normalized name matching
                 parsed.gameState.players.forEach((savedPlayer, index) => {
+                    if (newPlayers[index]) return; // already restored as a CPU seat above
                     const matchIndex = currentPool.findIndex(p => normalizeName(p.name) === normalizeName(savedPlayer.name));
                     if (matchIndex !== -1) {
                         const matchedConn = currentPool.splice(matchIndex, 1)[0];

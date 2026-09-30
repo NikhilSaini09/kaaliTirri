@@ -415,7 +415,7 @@ function runCpuBidding() {
 
         let plan = cpuBidPlans[player.id];
         if (!plan) {
-            plan = { maxBid: getCpuMaxBid(player.hand), nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
+            plan = { maxBid: getCpuMaxBid(player.hand, gameState.players.length), nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
             cpuBidPlans[player.id] = plan;
         }
         if (Date.now() < plan.nextActionAt) return;

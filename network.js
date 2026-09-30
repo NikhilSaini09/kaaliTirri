@@ -141,7 +141,13 @@ function attachHostConnectionHandler() {
         connections[conn.peer] = conn;
         lastSeen[conn.peer] = Date.now();
 
-        try { conn.send({ type: 'STATE_UPDATE', state: getSanitizedStateForClient(conn.peer) }); } catch (e) {}
+        // Don't send on the raw 'connection' event - the data channel isn't guaranteed to be
+        // ready yet, and a send here can be silently dropped. This is exactly what left a
+        // reconnecting client (e.g. after a host migration) stuck on stale state until some
+        // unrelated broadcastState() call happened to come along later.
+        conn.on('open', () => {
+            try { conn.send({ type: 'STATE_UPDATE', state: getSanitizedStateForClient(conn.peer) }); } catch (e) {}
+        });
 
         conn.on('close', () => markDisconnected(conn.peer));
 
@@ -257,7 +263,17 @@ function attachHostConnectionHandler() {
                     }
                 });
                 isHost = false;
+
+                // Fully retire the host role: stop accepting new connections as host (otherwise
+                // anyone still holding this peer's ID - a stale room-ID share, a reconnect
+                // attempt - would land on a "zombie" host still running its own copy of the
+                // game logic), and close out the connections everyone else is migrating away from.
+                if (typeof peer.removeAllListeners === 'function') peer.removeAllListeners('connection');
+                Object.values(connections).forEach(c => { try { c.close(); } catch (e) {} });
+                connections = {};
+
                 connectToHost(conn.peer);
+                renderState(); // otherwise the ex-host keeps seeing host-only controls until an unrelated broadcast arrives
             }
         });
     });

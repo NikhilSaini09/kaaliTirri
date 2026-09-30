@@ -88,7 +88,7 @@ function renderLobby() {
             const cpuTag = document.createElement('span');
             cpuTag.className = 'cpu-tag';
             const diff = member.cpuDifficulty || 'normal';
-            cpuTag.textContent = `🤖 CPU · ${diff.charAt(0).toUpperCase()}${diff.slice(1)}`;
+            cpuTag.textContent = `🤖 · ${diff.charAt(0).toUpperCase()}${diff.slice(1)}`;
             main.appendChild(cpuTag);
         }
 
@@ -381,7 +381,7 @@ function renderGameBoard() {
     gameState.board.forEach((card) => {
         let entry = boardCardCache[card.id];
         const isKaaliTirri = card.value === '3' && card.suit === '♠';
-        
+
         if (!entry) {
             const cardEl = createCardElement(card, false);
             cardEl.classList.add('played-card');
@@ -466,8 +466,14 @@ function renderGameBoard() {
             oppDiv.style.transform = 'translate(-50%, -50%)';
         }
 
-        let teamIcon = (player.isCPU ? '🤖 ' : '') + (player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : ''));
+        let teamIcon = (player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : ''));
         const cleanName = cleanPlayerName(player.name);
+
+        let diffBadge = '';
+        if (player.isCPU) {
+            const diff = player.cpuDifficulty || 'normal';
+            diffBadge = `<span style="font-size: 14px;">(${diff.charAt(0).toUpperCase()})</span>`;
+        }
 
         let pileHtml = '';
         if (player.wonCards && player.wonCards.length > 0) {
@@ -483,7 +489,7 @@ function renderGameBoard() {
             `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(Math.trunc((player.hand.length + 1) / 2), 5))}</div>`;
 
         oppDiv.innerHTML = `
-            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${escapeHtml(cleanName)}</span>
+            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${diffBadge}${escapeHtml(cleanName)}</span>
             <span class="opp-meta">${player.hand.length} C &middot; ${player.points} Pts</span>
             ${fanHtml}
             ${isFolded ? '<span class="fold-tag">FOLDED</span>' : ''}

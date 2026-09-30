@@ -100,7 +100,7 @@ function addCpuPlayer(difficulty) {
     if (CPU_DIFFICULTIES.indexOf(difficulty) === -1) difficulty = 'normal';
     const id = 'cpu_' + Math.random().toString(36).slice(2, 9);
     gameState.players.push({
-        id, name: `CPU ${existingCpuCount + 1}`, hand: [], wonCards: [], points: 0,
+        id, name: `Bot${existingCpuCount + 1}`, hand: [], wonCards: [], points: 0,
         currentBid: 0, team: 'UNKNOWN', isCPU: true, cpuDifficulty: difficulty
     });
     broadcastState();

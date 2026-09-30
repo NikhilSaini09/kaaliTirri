@@ -37,7 +37,7 @@
 html, body {
     margin: 0;
     padding: 0;
-    height: 100%;
+    height: 100dvh;
 }
 
 body {
@@ -45,7 +45,7 @@ body {
     color: var(--ivory);
     background: var(--felt-glow);
     background-color: var(--felt-800);
-    min-height: 100vh;
+    min-height: 100dvh;
     overflow: hidden;
     display: flex;
     justify-content: center;
@@ -132,7 +132,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 #view-landing {
     justify-content: center;
-    min-height: 100vh;
+    min-height: 100dvh;
     padding: 24px;
     text-align: center;
 }
@@ -367,7 +367,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 #view-game {
     width: 100%;
     max-width: 1800px;
-    height: 100vh;
+    height: 100dvh;
     flex-direction: column;
     margin: 0 auto;
     position: relative;
@@ -880,7 +880,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     height: 72px;
     border-radius: 6px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.55);
-    animation: none; /* regular plays get their entrance from JS-driven translate/scale instead */
+    animation: none;
 }
 
 @keyframes kaali-tirri-spin-in {
@@ -1011,13 +1011,11 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     min-height: 100px;
 }
 
-/* How to Play - button floats above all 3 views (it's a direct body child, not tied to
-   any one .view-container), and the modal reuses the same look as the other modals. */
 #howToPlayBtn {
     position: fixed;
     top: 16px;
     right: 16px;
-    z-index: 3100; /* stay clickable even over the pause overlay (3000) */
+    z-index: 3100;
     width: 42px;
     height: 42px;
     border-radius: 50%;

@@ -10,19 +10,26 @@ function switchView(viewId) {
     document.getElementById(viewId).style.display = 'flex';
 }
 
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let audioCtx = null;
+function getAudioCtx() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+}
 function playTone(freq, type, duration, vol) {
-    if(audioCtx.state === 'suspended') audioCtx.resume();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
     osc.type = type;
-    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
     osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    gain.connect(ctx.destination);
     osc.start();
-    osc.stop(audioCtx.currentTime + duration);
+    osc.stop(ctx.currentTime + duration);
 }
 function playCardSound() { playTone(250, 'triangle', 0.1, 0.4); }
 function playKaaliTirriSound() { playTone(300, 'sawtooth', 0.2, 0.5); setTimeout(() => playTone(600, 'square', 0.4, 0.4), 100); }
@@ -87,8 +94,7 @@ function renderLobby() {
         if (member.isCPU) {
             const cpuTag = document.createElement('span');
             cpuTag.className = 'cpu-tag';
-            const diff = member.cpuDifficulty || 'normal';
-            cpuTag.textContent = `🤖 · ${diff.charAt(0).toUpperCase()}${diff.slice(1)}`;
+            cpuTag.textContent = `🤖 · AI`;
             main.appendChild(cpuTag);
         }
 
@@ -174,10 +180,8 @@ function renderLobby() {
     if (isHost) {
         document.getElementById('startGameBtn').style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
         const addCpuBtn = document.getElementById('addCpuBtn');
-        const difficultySelect = document.getElementById('cpuDifficultySelect');
         if (addCpuBtn) {
             addCpuBtn.style.display = 'inline-block';
-            if (difficultySelect) difficultySelect.style.display = 'inline-block';
             const cpuCount = gameState.players.filter(p => p.isCPU).length;
             addCpuBtn.disabled = cpuCount >= MAX_CPU_PLAYERS;
             addCpuBtn.title = addCpuBtn.disabled ? `Up to ${MAX_CPU_PLAYERS} CPU players` : 'Add a CPU-controlled player';
@@ -304,6 +308,16 @@ function renderGameBoard() {
     if (gameState.phase === 'BIDDING' && gameState.biddingDeadline) {
         timerWrap.classList.add('is-visible');
         startTimerBarLoop(gameState.biddingDeadline, BIDDING_TIME_MS, 'Bidding');
+    } else if (gameState.phase === 'TRUMP_SELECTION' && gameState.trumpSelectionDeadline) {
+        timerWrap.classList.add('is-visible');
+        const bidder = gameState.players.find(p => p.id === gameState.highestBid.playerId);
+        const bidderName = bidder ? cleanPlayerName(bidder.name) : cleanPlayerName(gameState.highestBid.playerName || '');
+        const isMe = gameState.highestBid.playerId === myPeerId;
+        startTimerBarLoop(
+            gameState.trumpSelectionDeadline,
+            TRUMP_SELECTION_TIME_MS, 
+            isMe ? 'Choose Trump' : `${bidderName} choosing trump`
+        );
     } else if (gameState.phase === 'PLAYING' && gameState.turnDeadline) {
         timerWrap.classList.add('is-visible');
         const turnName = activeTurnPlayer ? cleanPlayerName(activeTurnPlayer.name) : '';
@@ -385,16 +399,11 @@ function renderGameBoard() {
         if (!entry) {
             const cardEl = createCardElement(card, false);
             cardEl.classList.add('played-card');
-            const rotation = (Math.random() * 12 - 6); // pick once, keep for the card's lifetime on the table
+            const rotation = (Math.random() * 12 - 6);
 
             if (isKaaliTirri) {
-                // Its own self-contained spin/glow flourish - the highest-value card in the
-                // game deserves a bigger moment than a normal play.
                 cardEl.classList.add('is-kaali-tirri');
             } else {
-                // Cheap directional "fly in from the player's seat" - a couple of standalone
-                // CSS properties (translate/scale) transitioned once on insert, layered on top
-                // of (not fighting) the positional `transform` set below.
                 let dx = 0, dy = 46;
                 if (card.playedBy !== myPeerId && seatAngle[card.playedBy] !== undefined) {
                     const ang = seatAngle[card.playedBy];
@@ -469,12 +478,6 @@ function renderGameBoard() {
         let teamIcon = (player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : ''));
         const cleanName = cleanPlayerName(player.name);
 
-        let diffBadge = '';
-        if (player.isCPU) {
-            const diff = player.cpuDifficulty || 'normal';
-            diffBadge = `<span style="font-size: 14px;">(${diff.charAt(0).toUpperCase()})</span>`;
-        }
-
         let pileHtml = '';
         if (player.wonCards && player.wonCards.length > 0) {
             pileHtml = isMobile
@@ -489,7 +492,7 @@ function renderGameBoard() {
             `<div class="hand-fan">${'<div class="card face-down mini-card hand-fan-card"></div>'.repeat(Math.min(Math.trunc((player.hand.length + 1) / 2), 5))}</div>`;
 
         oppDiv.innerHTML = `
-            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${diffBadge}${escapeHtml(cleanName)}</span>
+            <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${escapeHtml(cleanName)}</span>
             <span class="opp-meta">${player.hand.length} C &middot; ${player.points} Pts</span>
             ${fanHtml}
             ${isFolded ? '<span class="fold-tag">FOLDED</span>' : ''}
@@ -668,7 +671,11 @@ function renderGameBoard() {
                         rankSelect.id = `team-rank-${i}`;
                         rankSelect.name = `team-rank-${i}`;
                         rankSelect.setAttribute('aria-label', `Partner card ${i + 1} rank`);
-                        values.forEach(v => rankSelect.appendChild(new Option(v, v)));
+                        values.forEach(v => {
+                            const opt = new Option(v, v);
+                            if (v === 'A') opt.selected = true;
+                            rankSelect.appendChild(opt);
+                        });
 
                         const suitSelect = document.createElement('select');
                         suitSelect.className = 'team-suit-select';
@@ -808,9 +815,6 @@ function loadGame(event) {
                 playerData = parsed.playerData || [];
                 
                 let allCurrentUsers = [];
-                // CPU seats aren't "reconnecting" anyone - they have no live connection to
-                // match against, so folding them into this pool could hand a live human's
-                // slot to a bot (or vice versa) and softlock a seat. They're restored as-is below.
                 gameState.players.forEach(p => { if (!p.isCPU && !isDisconnected(p.id)) allCurrentUsers.push({ id: p.id, name: p.name }); });
                 (gameState.spectators || []).forEach(s => { if (!s.isCPU && !isDisconnected(s.id)) allCurrentUsers.push({ id: s.id, name: s.name }); });
                 
@@ -821,14 +825,13 @@ function loadGame(event) {
                 
                 let newPlayers = new Array(parsed.gameState.players.length).fill(null);
 
-                // CPU seats are restored exactly as saved - no reconnection needed.
                 parsed.gameState.players.forEach((savedPlayer, index) => {
                     if (savedPlayer.isCPU) newPlayers[index] = savedPlayer;
                 });
 
                 // PASS 1: Robust normalized name matching
                 parsed.gameState.players.forEach((savedPlayer, index) => {
-                    if (newPlayers[index]) return; // already restored as a CPU seat above
+                    if (newPlayers[index]) return;
                     const matchIndex = currentPool.findIndex(p => normalizeName(p.name) === normalizeName(savedPlayer.name));
                     if (matchIndex !== -1) {
                         const matchedConn = currentPool.splice(matchIndex, 1)[0];
@@ -938,8 +941,7 @@ function openWonCardsModal(player) {
 // UI Bindings
 document.getElementById('addCpuBtn')?.addEventListener('click', () => {
     if (!isHost) return;
-    const select = document.getElementById('cpuDifficultySelect');
-    addCpuPlayer(select ? select.value : 'normal');
+    addCpuPlayer();
 });
 
 document.getElementById('startGameBtn').addEventListener('click', () => {
@@ -954,6 +956,11 @@ document.getElementById('startGameBtn').addEventListener('click', () => {
 
 document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
     if (isHost) {
+        if (typeof trickEvalTimeout !== 'undefined' && trickEvalTimeout) {
+            clearTimeout(trickEvalTimeout);
+            trickEvalTimeout = null;
+        }
+
         gameState.phase = 'LOBBY';
 
         gameState.excludedIds = (gameState.spectators || []).map(sp => sp.id);

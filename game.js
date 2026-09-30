@@ -23,6 +23,7 @@ function sortHand(hand) {
 const MIN_BID = 130;
 const MAX_BID = 250;
 const BIDDING_TIME_MS = 30000;
+const TRUMP_SELECTION_TIME_MS = 60000;
 const TURN_TIME_MS = 30000;
 const RECONNECT_GRACE_MS = 5000;
 
@@ -60,8 +61,8 @@ function stripSpectatorTag(name) {
 
 function getLobbyMembers() {
     const members = [
-        ...gameState.players.map(p => ({ id: p.id, name: p.name, isCPU: !!p.isCPU, cpuDifficulty: p.cpuDifficulty })),
-        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU, cpuDifficulty: s.cpuDifficulty }))
+        ...gameState.players.map(p => ({ id: p.id, name: p.name, isCPU: !!p.isCPU })),
+        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU }))
     ];
     const order = gameState.lobbyOrder || [];
     const rank = id => { const i = order.indexOf(id); return i === -1 ? order.length : i; };
@@ -91,17 +92,15 @@ function toggleSeat(targetId) {
 }
 
 const MAX_CPU_PLAYERS = 7;
-const CPU_DIFFICULTIES = ['easy', 'normal', 'hard'];
 
-function addCpuPlayer(difficulty) {
+function addCpuPlayer() {
     if (!isHost || gameState.phase !== 'LOBBY') return;
     const existingCpuCount = gameState.players.filter(p => p.isCPU).length;
     if (existingCpuCount >= MAX_CPU_PLAYERS) return;
-    if (CPU_DIFFICULTIES.indexOf(difficulty) === -1) difficulty = 'normal';
     const id = 'cpu_' + Math.random().toString(36).slice(2, 9);
     gameState.players.push({
-        id, name: `Bot${existingCpuCount + 1}`, hand: [], wonCards: [], points: 0,
-        currentBid: 0, team: 'UNKNOWN', isCPU: true, cpuDifficulty: difficulty
+        id, name: `BOT${existingCpuCount + 1}`, hand: [], wonCards: [], points: 0,
+        currentBid: 0, team: 'UNKNOWN', isCPU: true
     });
     broadcastState();
 }
@@ -124,11 +123,11 @@ function applySeatSelection() {
     if (seated.length < MIN_PLAYERS) return false;
 
     gameState.players = seated.map(m => ({
-        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN', isCPU: !!m.isCPU, cpuDifficulty: m.cpuDifficulty
+        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN', isCPU: !!m.isCPU
     }));
     gameState.spectators = members
         .filter(m => excluded.has(m.id))
-        .map(m => ({ id: m.id, name: m.name + ' (Spectator)', isCPU: !!m.isCPU, cpuDifficulty: m.cpuDifficulty }));
+        .map(m => ({ id: m.id, name: m.name + ' (Spectator)', isCPU: !!m.isCPU }));
     gameState.lobbyOrder = members.map(m => m.id);
     gameState.disconnectedIds = [];
     gameState.disconnectedAt = {};
@@ -169,6 +168,7 @@ function isCardPlayable(playerId, card) {
     return true; 
 }
 
+let trickEvalTimeout = null;
 function handlePlayCard(playerId, playedCard) {
     if (gameState.isPaused) return;
     if (!playedCard || !playedCard.id) return;
@@ -204,7 +204,7 @@ function handlePlayCard(playerId, playedCard) {
     if (gameState.board.length === gameState.players.length) {
         gameState.phase = 'TRICK_EVALUATION';
         gameState.turnDeadline = null;
-        setTimeout(() => {
+        trickEvalTimeout = setTimeout(() => {
             evaluateTrick();
             broadcastState();
         }, 2000);
@@ -283,6 +283,8 @@ function evaluateRoundEnd() {
 
         gameStats[cleanName].winRate = ((gameStats[cleanName].wins / gameStats[cleanName].gamesPlayed) * 100).toFixed(2) + '%';
     });
+
+    if (typeof sendGameStats === 'function') sendGameStats();
 }
 
 const EVICTION_ORDER = [];
@@ -294,6 +296,11 @@ for (let v of evictionValues) {
     }
 }
 function startDeal() {
+    if (trickEvalTimeout) {
+        clearTimeout(trickEvalTimeout);
+        trickEvalTimeout = null;
+    }
+
     let fullDeck = generateDeck();
     shuffle(fullDeck);
     shuffle(fullDeck);
@@ -335,7 +342,8 @@ function startDeal() {
     cpuTrumpPlan = null;
     cpuMovePlan = null;
 
-    let currentPlayer = 0;
+    gameState.dealerIndex = (gameState.dealerIndex + 1) % numPlayers;
+    let currentPlayer = (gameState.dealerIndex + 1) % numPlayers;
     while (gameState.deck.length > 0) {
         gameState.players[currentPlayer].hand.push(gameState.deck.pop());
         currentPlayer = (currentPlayer + 1) % numPlayers;
@@ -348,7 +356,7 @@ function startDeal() {
 function enterTrumpSelection() {
     gameState.phase = 'TRUMP_SELECTION';
     gameState.biddingDeadline = null;
-    gameState.trumpSelectionDeadline = Date.now() + BIDDING_TIME_MS;
+    gameState.trumpSelectionDeadline = Date.now() + TRUMP_SELECTION_TIME_MS;
 }
 
 function handlePlaceBid(playerId, amount) {
@@ -401,23 +409,24 @@ function resetBiddingTimer() {
     gameState.biddingDeadline = Date.now() + BIDDING_TIME_MS;
 }
 
-// --- CPU orchestration: all state below is host-side-only "thinking" bookkeeping, never
-// broadcast (it isn't part of gameState) and reset every deal via startDeal(). ---
-let cpuBidPlans = {};   // playerId -> { maxBid, nextActionAt }
-let cpuTrumpPlan = null; // { playerId, actAt } - the CPU currently choosing trump, if any
-let cpuMovePlan = null;  // { playerId, actAt } - the CPU currently deciding its card play, if any
+let cpuBidPlans = {};
+let cpuTrumpPlan = null;
+let cpuMovePlan = null;
 
 function runCpuBidding() {
     if (!isHost || gameState.isPaused || gameState.phase !== 'BIDDING') return;
     let changed = false;
+    let plannedThisTick = false;
 
     gameState.players.forEach(player => {
         if (!player.isCPU || player.hasFolded) return;
-        if (gameState.highestBid.playerId === player.id) return; // already winning, nothing to decide
+        if (gameState.highestBid.playerId === player.id) return;
 
         let plan = cpuBidPlans[player.id];
         if (!plan) {
-            plan = { maxBid: getCpuMaxBid(player.hand, gameState.players.length, player.cpuDifficulty), nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
+            if (plannedThisTick) return;
+            plannedThisTick = true;
+            plan = { maxBid: getCpuMaxBid(player.hand, gameState.players.length), nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
             cpuBidPlans[player.id] = plan;
         }
         if (Date.now() < plan.nextActionAt) return;
@@ -425,10 +434,15 @@ function runCpuBidding() {
         const nextAmount = gameState.highestBid.amount === 0 ? MIN_BID : gameState.highestBid.amount + 5;
         if (nextAmount <= plan.maxBid && nextAmount <= MAX_BID) {
             handlePlaceBid(player.id, nextAmount);
+        } else if (gameState.highestBid.playerId === null &&
+                   gameState.players.filter(p => !p.hasFolded).length === 1) {
+            // Everyone else has folded and nobody has bid: a bot whose own ceiling is below the
+            // minimum still has to take the bid (rather than forcing an endless re-deal).
+            handlePlaceBid(player.id, MIN_BID);
         } else {
             handleFold(player.id);
         }
-        plan.nextActionAt = Date.now() + 1200 + Math.random() * 2200; // stagger the next decision too
+        plan.nextActionAt = Date.now() + 1200 + Math.random() * 2200;
         changed = true;
     });
 
@@ -477,23 +491,34 @@ function checkTurnTimeout() {
             cpuMovePlan = { playerId: player.id, actAt: Date.now() + 700 + Math.random() * 1300 };
         }
         if (Date.now() < cpuMovePlan.actAt) return;
-        const card = getBestCardToPlay(player.id, gameState, player.cpuDifficulty);
+        const card = getBestCardToPlay(player.id, gameState);
         cpuMovePlan = null;
         if (card) handlePlayCard(player.id, card);
         else gameState.turnDeadline = null;
         broadcastState();
         return;
     }
-    cpuMovePlan = null; // the CPU-in-progress marker only ever applies to the seat currently up
+    cpuMovePlan = null;
 
     const isPlayerDisconnected = isDisconnected(player.id);
 
-    if ((isPlayerDisconnected && hasGraceExpired(player.id)) || Date.now() >= gameState.turnDeadline) {
-        // Same fairness-respecting algo a CPU uses for its own turns - it only looks at this
-        // player's own hand and what's already been played, never at anyone else's cards.
-        // Use the strongest tier here: this only fires once in a while for an absent human,
-        // not every second for a live CPU, so the extra cost is a non-issue.
-        const cardToPlay = getBestCardToPlay(player.id, gameState, 'hard');
+    if (Date.now() >= gameState.turnDeadline) {
+        const playableCards = player.hand.filter(c => isCardPlayable(player.id, c));
+        const cardToPlay = playableCards.length > 0 
+            ? playableCards[Math.floor(Math.random() * playableCards.length)] 
+            : null;
+
+        if (cardToPlay) {
+            handlePlayCard(player.id, cardToPlay);
+        } else {
+            gameState.turnDeadline = null;
+        }
+        broadcastState();
+        return;
+    }
+
+    if ((isPlayerDisconnected && hasGraceExpired(player.id))) {
+        const cardToPlay = getBestCardToPlay(player.id, gameState);
 
         if (cardToPlay) {
             handlePlayCard(player.id, cardToPlay);

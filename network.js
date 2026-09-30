@@ -29,6 +29,16 @@ function broadcastState() {
     renderState(); 
 }
 
+function sendGameStats() {
+    if (!isHost) return;
+
+    Object.values(connections).forEach(conn => {
+        try {
+            conn.send({ type: 'GAME_STATS_UPDATE', stats : gameStats });
+        } catch (e) {}
+    });
+}
+
 function kickPlayer(targetId) {
     if (!isHost) return;
     if (connections[targetId]) {
@@ -141,10 +151,6 @@ function attachHostConnectionHandler() {
         connections[conn.peer] = conn;
         lastSeen[conn.peer] = Date.now();
 
-        // Don't send on the raw 'connection' event - the data channel isn't guaranteed to be
-        // ready yet, and a send here can be silently dropped. This is exactly what left a
-        // reconnecting client (e.g. after a host migration) stuck on stale state until some
-        // unrelated broadcastState() call happened to come along later.
         conn.on('open', () => {
             try { conn.send({ type: 'STATE_UPDATE', state: getSanitizedStateForClient(conn.peer) }); } catch (e) {}
         });
@@ -264,16 +270,12 @@ function attachHostConnectionHandler() {
                 });
                 isHost = false;
 
-                // Fully retire the host role: stop accepting new connections as host (otherwise
-                // anyone still holding this peer's ID - a stale room-ID share, a reconnect
-                // attempt - would land on a "zombie" host still running its own copy of the
-                // game logic), and close out the connections everyone else is migrating away from.
                 if (typeof peer.removeAllListeners === 'function') peer.removeAllListeners('connection');
                 Object.values(connections).forEach(c => { try { c.close(); } catch (e) {} });
                 connections = {};
 
                 connectToHost(conn.peer);
-                renderState(); // otherwise the ex-host keeps seeing host-only controls until an unrelated broadcast arrives
+                renderState();
             }
         });
     });
@@ -308,6 +310,9 @@ function connectToHost(targetId, onFirstJoin) {
         if (data.type === 'STATE_UPDATE') {
             gameState = data.state;
             renderState(); 
+        }
+        if (data.type === 'GAME_STATS_UPDATE') {
+            gameStats = data.stats;
         }
         if (data.type === 'KICKED') {
             alert("You have been kicked by the host.");

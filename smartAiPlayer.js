@@ -1,32 +1,9 @@
-// cpu.js - Advanced AI Engine for Kaali Tirri
-//
 // Fairness rule for every function in this file: a CPU only ever reads its OWN player.hand,
 // plus purely public information - state.board, everyone's wonCards, revealed team status,
 // and how many cards an opponent has left (a count, never contents). It never reads another
-// player's real .hand. Where this file needs to reason about opponents' likely cards (the
+// player's real hand. Where this file needs to reason about opponents' likely cards (the
 // endgame lookahead, the bidding estimate), it does so by SAMPLING plausible hands from the
 // unseen-card pool - never by peeking at what's actually in anyone's hand.
-//
-// Four upgrades over a pure single-trick heuristic, roughly in the order they pay for
-// themselves:
-//   1. Void tracking       - who's publicly known to be out of a suit.
-//   2. Team-affinity        - guessing an UNKNOWN opponent's side from how they've played.
-//   3. Bidding via rollout - simulate the whole hand a few times to find a realistic ceiling.
-//   4. Endgame lookahead    - in the last few tricks, sample plausible worlds and pick the
-//                             move with the best simulated outcome instead of a single-trick
-//                             heuristic that can't see past the current trick.
-
-// ---------------------------------------------------------------------------------------
-// 1. TRICK HISTORY, VOID TRACKING & TEAM AFFINITY - all derived from public data already
-//    sitting in `state`. No new fields needed anywhere else.
-//
-//    Every trick a player wins gets pushed onto their wonCards as one contiguous block of
-//    exactly numPlayers cards, in play order (handlePlayCard pushes onto state.board in play
-//    order, and evaluateTrick pushes the whole board onto the winner's wonCards). So each
-//    consecutive chunk of numPlayers cards in anyone's wonCards is exactly one past trick,
-//    chunk[0] being that trick's lead card. That's enough to reconstruct full trick history -
-//    who led what, who couldn't follow, who won - without any other file needing to change.
-// ---------------------------------------------------------------------------------------
 
 function reconstructTrickHistory(state) {
     const numPlayers = state.players.length;
@@ -58,7 +35,6 @@ function resolveTrickWinnerCard(trick, trumpSuit) {
     return winner;
 }
 
-/** playerId -> Set of suits that player is publicly known to hold zero cards of. */
 function computeVoidMap(state) {
     const voidMap = {};
     state.players.forEach(p => { voidMap[p.id] = new Set(); });
@@ -75,23 +51,16 @@ function computeVoidMap(state) {
     };
 
     reconstructTrickHistory(state).forEach(markTrick);
-    markTrick(state.board); // the trick currently in progress is equally reliable public info
+    markTrick(state.board);
     return voidMap;
 }
 
-/**
- * playerId -> signed score, positive leaning BIDDER_TEAM, negative leaning DEFENDER_TEAM.
- * Only scores a clear, deliberate tell: a still-UNKNOWN player who was void in the led suit
- * (so genuinely free to choose) and chose to feed points into a trick a KNOWN side was
- * winning. That's the one signal that's both strong and cheap to get right; anything weaker
- * (e.g. simply following suit with a high card) is dropped since it's usually just "that's
- * the only card of that suit they had", not a real choice.
- */
 function computeTeamAffinity(state) {
     const affinity = {};
     state.players.forEach(p => { affinity[p.id] = 0; });
     const teamOf = {};
     state.players.forEach(p => { teamOf[p.id] = p.team; });
+    let affinityFactor = 2.4;
 
     reconstructTrickHistory(state).forEach(trick => {
         const leadSuit = trick[0].suit;
@@ -99,13 +68,14 @@ function computeTeamAffinity(state) {
         if (!winnerCard) return;
         const winnerTeam = teamOf[winnerCard.playedBy];
         if (winnerTeam !== 'BIDDER_TEAM' && winnerTeam !== 'DEFENDER_TEAM') return;
-        const sign = winnerTeam === 'BIDDER_TEAM' ? 1 : -1;
+        const sign = winnerTeam === 'BIDDER_TEAM' ? affinityFactor : -affinityFactor;
+        affinityFactor -= 0.15;
 
         trick.forEach(c => {
             if (c === winnerCard) return;
             const pid = c.playedBy;
             if (!pid || teamOf[pid] !== 'UNKNOWN') return;
-            const wasFree = c.suit !== leadSuit; // void in lead suit - a real choice, not forced
+            const wasFree = c.suit !== leadSuit;
             const points = getCardPoints(c);
             if (wasFree && points > 0) {
                 affinity[pid] = (affinity[pid] || 0) + sign * (points / 10);
@@ -116,10 +86,7 @@ function computeTeamAffinity(state) {
     return affinity;
 }
 
-const TEAM_AFFINITY_THRESHOLD = 1.5;
-
-/** Best current guess at a player's team - their revealed team if known, otherwise a guess
- *  from computeTeamAffinity once the evidence is strong enough to trust, otherwise UNKNOWN. */
+const TEAM_AFFINITY_THRESHOLD = 3.5;
 function guessTeam(playerId, state, affinity) {
     const p = state.players.find(pl => pl.id === playerId);
     if (!p) return 'UNKNOWN';
@@ -130,11 +97,6 @@ function guessTeam(playerId, state, affinity) {
     return 'UNKNOWN';
 }
 
-/**
- * A player's own team is never actually ambiguous to them - they know their whole hand, so
- * they can check it against the FULL original call list (not just the still-hidden portion)
- * to know for certain, often long before their team would otherwise get revealed by play.
- */
 function determineMyTeam(playerId, state) {
     const player = state.players.find(p => p.id === playerId);
     if (!player) return 'UNKNOWN';
@@ -144,33 +106,15 @@ function determineMyTeam(playerId, state) {
     const everCalled = (state.originalCalledCards && state.originalCalledCards.length > 0)
         ? state.originalCalledCards
         : (state.calledCards || []);
-    if (everCalled.length === 0) return 'DEFENDER_TEAM'; // no partner cards were ever called at all
+    if (everCalled.length === 0) return 'DEFENDER_TEAM';
     return everCalled.some(code => myCodes.has(code)) ? 'BIDDER_TEAM' : 'DEFENDER_TEAM';
 }
 
-// ---------------------------------------------------------------------------------------
-// Core per-trick heuristic - the fast default path, now void- and affinity-aware.
-// ---------------------------------------------------------------------------------------
-
-function computeValidCards(player, state) {
-    if (state.board.length > 0) {
-        const leadSuit = state.board[0].suit;
-        if (player.hand.some(c => c.suit === leadSuit)) return player.hand.filter(c => c.suit === leadSuit);
-    }
-    return player.hand;
-}
-
-function getBestCardToPlay(playerId, state, difficulty) {
-    difficulty = difficulty || 'normal';
+function getBestCardToPlay(playerId, state) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
 
-    // Deep endgame: worth a few sampled playouts instead of a single-trick heuristic. Wrapped
-    // defensively - simulation is a pure bonus, and any edge case in it should never be able
-    // to stall the table, so a failure here just falls back to the proven heuristic below.
-    // Reserved for 'hard' - it's the most expensive piece of this file, and a bot that's meant
-    // to be beatable shouldn't be playing provably-optimal endgames anyway.
-    if (difficulty === 'hard' && player.hand.length <= ENDGAME_SEARCH_MAX_HAND && state.board.length < state.players.length) {
+    if (player.hand.length <= ENDGAME_SEARCH_MAX_HAND && state.board.length < state.players.length) {
         try {
             const leadSuit = state.board.length > 0 ? state.board[0].suit : null;
             const legal = leadSuit && player.hand.some(c => c.suit === leadSuit)
@@ -180,27 +124,14 @@ function getBestCardToPlay(playerId, state, difficulty) {
                 const choice = getBestCardToPlayEndgame(playerId, state, legal);
                 if (choice) return choice;
             }
-        } catch (e) { /* fall through to the heuristic */ }
+        } catch (e) {}
     }
 
-    let choice = getBestCardToPlayInner(playerId, state, difficulty === 'easy');
-    // Defensive: every scenario branch above should always return a card, but if some future
-    // edit leaves a gap, falling through to an illegal null move would stall the whole table.
-    choice = choice || player.hand[0];
-
-    if (difficulty === 'easy') {
-        // Deliberately misplay sometimes so a newer player has a realistic chance - never an
-        // illegal move, just not always the "best" one.
-        const legalNow = computeValidCards(player, state);
-        if (legalNow.length > 1 && Math.random() < 0.25) {
-            choice = legalNow[Math.floor(Math.random() * legalNow.length)];
-        }
-    }
-
-    return choice;
+    let choice = getBestCardToPlayInner(playerId, state);
+    return choice || player.hand[0];
 }
 
-function getBestCardToPlayInner(playerId, state, naive) {
+function getBestCardToPlayInner(playerId, state) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
 
@@ -217,7 +148,7 @@ function getBestCardToPlayInner(playerId, state, naive) {
 
     if (validCards.length === 1) return validCards[0];
 
-    const voidMap = naive ? {} : computeVoidMap(state);
+    const voidMap = computeVoidMap(state);
 
     // 2. REBUILD MEMORY (Card Counting)
     const playedCards = [];
@@ -266,9 +197,7 @@ function getBestCardToPlayInner(playerId, state, naive) {
         currentWinnerId = currentWinnerCard.playedBy;
         if (currentWinnerId === playerId) {
             isTeammateWinning = true;
-        } else if (!naive) {
-            // A behavioral guess for a still-UNKNOWN winner is better than treating them as
-            // a coin flip - e.g. someone who's been quietly feeding the bidder points.
+        } else {
             const affinity = computeTeamAffinity(state);
             const effectiveWinnerTeam = guessTeam(currentWinnerId, state, affinity);
             if (effectiveWinnerTeam !== 'UNKNOWN' && effectiveWinnerTeam === myTrueTeam) {
@@ -281,9 +210,6 @@ function getBestCardToPlayInner(playerId, state, naive) {
     if (state.board.length === 0) {
         const others = state.players.filter(p => p.id !== playerId && p.hand.length > 0);
 
-        // Priority 0: every other active player is publicly known to be void in this suit -
-        // even our weakest card of it can't be beaten in-suit (only a trump could touch it),
-        // so lead low here and keep genuinely strong cards for tricks without that guarantee.
         const guaranteedSuits = suits.filter(s =>
             s !== state.trumpSuit &&
             others.length > 0 &&
@@ -626,17 +552,10 @@ function evaluateCpuHandStrength(hand) {
  * then shades the result down a bit - bidding right up to your own best-case estimate leaves
  * no margin for a single misplay or an unlucky trump split.
  */
-function getCpuMaxBid(hand, numPlayers, difficulty) {
-    difficulty = difficulty || 'normal';
+function getCpuMaxBid(hand, numPlayers) {
     if (!numPlayers) numPlayers = Math.max(2, Math.round(52 / Math.max(1, hand.length)));
 
     const staticPrior = MIN_BID + evaluateCpuHandStrength(hand) * 3.2;
-
-    if (difficulty !== 'hard') {
-        const shade = difficulty === 'easy' ? 0.8 : 0.92;
-        const capped = Math.max(MIN_BID, Math.min(MAX_BID, staticPrior * shade));
-        return Math.floor(capped / 5) * 5;
-    }
 
     let total = 0;
     let successes = 0;

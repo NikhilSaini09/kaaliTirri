@@ -152,14 +152,25 @@ function determineMyTeam(playerId, state) {
 // Core per-trick heuristic - the fast default path, now void- and affinity-aware.
 // ---------------------------------------------------------------------------------------
 
-function getBestCardToPlay(playerId, state) {
+function computeValidCards(player, state) {
+    if (state.board.length > 0) {
+        const leadSuit = state.board[0].suit;
+        if (player.hand.some(c => c.suit === leadSuit)) return player.hand.filter(c => c.suit === leadSuit);
+    }
+    return player.hand;
+}
+
+function getBestCardToPlay(playerId, state, difficulty) {
+    difficulty = difficulty || 'normal';
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
 
     // Deep endgame: worth a few sampled playouts instead of a single-trick heuristic. Wrapped
     // defensively - simulation is a pure bonus, and any edge case in it should never be able
     // to stall the table, so a failure here just falls back to the proven heuristic below.
-    if (player.hand.length <= ENDGAME_SEARCH_MAX_HAND && state.board.length < state.players.length) {
+    // Reserved for 'hard' - it's the most expensive piece of this file, and a bot that's meant
+    // to be beatable shouldn't be playing provably-optimal endgames anyway.
+    if (difficulty === 'hard' && player.hand.length <= ENDGAME_SEARCH_MAX_HAND && state.board.length < state.players.length) {
         try {
             const leadSuit = state.board.length > 0 ? state.board[0].suit : null;
             const legal = leadSuit && player.hand.some(c => c.suit === leadSuit)
@@ -172,13 +183,24 @@ function getBestCardToPlay(playerId, state) {
         } catch (e) { /* fall through to the heuristic */ }
     }
 
-    const choice = getBestCardToPlayInner(playerId, state);
+    let choice = getBestCardToPlayInner(playerId, state, difficulty === 'easy');
     // Defensive: every scenario branch above should always return a card, but if some future
     // edit leaves a gap, falling through to an illegal null move would stall the whole table.
-    return choice || player.hand[0];
+    choice = choice || player.hand[0];
+
+    if (difficulty === 'easy') {
+        // Deliberately misplay sometimes so a newer player has a realistic chance - never an
+        // illegal move, just not always the "best" one.
+        const legalNow = computeValidCards(player, state);
+        if (legalNow.length > 1 && Math.random() < 0.25) {
+            choice = legalNow[Math.floor(Math.random() * legalNow.length)];
+        }
+    }
+
+    return choice;
 }
 
-function getBestCardToPlayInner(playerId, state) {
+function getBestCardToPlayInner(playerId, state, naive) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
 
@@ -195,7 +217,7 @@ function getBestCardToPlayInner(playerId, state) {
 
     if (validCards.length === 1) return validCards[0];
 
-    const voidMap = computeVoidMap(state);
+    const voidMap = naive ? {} : computeVoidMap(state);
 
     // 2. REBUILD MEMORY (Card Counting)
     const playedCards = [];
@@ -244,7 +266,7 @@ function getBestCardToPlayInner(playerId, state) {
         currentWinnerId = currentWinnerCard.playedBy;
         if (currentWinnerId === playerId) {
             isTeammateWinning = true;
-        } else {
+        } else if (!naive) {
             // A behavioral guess for a still-UNKNOWN winner is better than treating them as
             // a coin flip - e.g. someone who's been quietly feeding the bidder points.
             const affinity = computeTeamAffinity(state);
@@ -604,10 +626,17 @@ function evaluateCpuHandStrength(hand) {
  * then shades the result down a bit - bidding right up to your own best-case estimate leaves
  * no margin for a single misplay or an unlucky trump split.
  */
-function getCpuMaxBid(hand, numPlayers) {
+function getCpuMaxBid(hand, numPlayers, difficulty) {
+    difficulty = difficulty || 'normal';
     if (!numPlayers) numPlayers = Math.max(2, Math.round(52 / Math.max(1, hand.length)));
 
     const staticPrior = MIN_BID + evaluateCpuHandStrength(hand) * 3.2;
+
+    if (difficulty !== 'hard') {
+        const shade = difficulty === 'easy' ? 0.8 : 0.92;
+        const capped = Math.max(MIN_BID, Math.min(MAX_BID, staticPrior * shade));
+        return Math.floor(capped / 5) * 5;
+    }
 
     let total = 0;
     let successes = 0;
@@ -633,10 +662,26 @@ function getCpuMaxBid(hand, numPlayers) {
 }
 
 /**
+ * Which exact cards this deal cut from the deck (when 52 doesn't divide evenly across
+ * `numPlayers`, startDeal() trims a deterministic set down to size). This is public info -
+ * anyone applying the same formula from the same player count gets the same answer - so
+ * using it isn't peeking at anything hidden, and it's essential: calling a partner card that
+ * was cut from this deal entirely can never find a teammate.
+ */
+function getEvictedCardSet(numPlayers) {
+    if (!numPlayers || typeof EVICTION_ORDER === 'undefined') return new Set();
+    const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));
+    const totalDealt = cardsPerPlayer * numPlayers;
+    const toRemove = Math.max(0, 52 - totalDealt);
+    return new Set(EVICTION_ORDER.slice(0, toRemove));
+}
+
+/**
  * Trump suit + partner calls for a CPU that won the bid. Trump is whichever suit it holds
  * the most (and highest-value) cards of; partner calls prioritize the strongest ranks it
- * does NOT hold itself, spread across suits, since calling a card already in your own hand
- * can never find a teammate.
+ * does NOT hold itself, spread across suits, skipping any card this deal doesn't even
+ * contain - calling a card already in your own hand, or one that was cut from the deck
+ * entirely, can never find a teammate.
  */
 function getCpuTrumpChoice(player, numPlayers) {
     const bySuit = {};
@@ -652,6 +697,7 @@ function getCpuTrumpChoice(player, numPlayers) {
 
     const allowedCards = Math.floor((numPlayers - 2) / 2);
     const ownSet = new Set(player.hand.map(c => `${c.value}${c.suit}`));
+    const evicted = getEvictedCardSet(numPlayers);
     const calls = [];
     const priorityValues = ['A', 'K', 'Q', 'J', '10'];
     outer:
@@ -659,7 +705,21 @@ function getCpuTrumpChoice(player, numPlayers) {
         for (const s of suits) {
             if (calls.length >= allowedCards) break outer;
             const code = `${v}${s}`;
+            if (evicted.has(code)) continue; // doesn't exist in this deal at all
             if (!ownSet.has(code) && calls.indexOf(code) === -1) calls.push(code);
+        }
+    }
+    // Extremely unlikely (would need most of A/K/Q/J/10 across all suits owned or evicted),
+    // but fall back to the full rank list rather than ever call fewer cards than allowed.
+    if (calls.length < allowedCards) {
+        outerFallback:
+        for (let i = values.length - 1; i >= 0; i--) {
+            for (const s of suits) {
+                if (calls.length >= allowedCards) break outerFallback;
+                const code = `${values[i]}${s}`;
+                if (evicted.has(code) || ownSet.has(code) || calls.indexOf(code) !== -1) continue;
+                calls.push(code);
+            }
         }
     }
     return { suit: bestSuit, calls: calls };

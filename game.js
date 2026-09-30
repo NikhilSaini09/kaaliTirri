@@ -60,8 +60,8 @@ function stripSpectatorTag(name) {
 
 function getLobbyMembers() {
     const members = [
-        ...gameState.players.map(p => ({ id: p.id, name: p.name, isCPU: !!p.isCPU })),
-        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU }))
+        ...gameState.players.map(p => ({ id: p.id, name: p.name, isCPU: !!p.isCPU, cpuDifficulty: p.cpuDifficulty })),
+        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU, cpuDifficulty: s.cpuDifficulty }))
     ];
     const order = gameState.lobbyOrder || [];
     const rank = id => { const i = order.indexOf(id); return i === -1 ? order.length : i; };
@@ -91,15 +91,17 @@ function toggleSeat(targetId) {
 }
 
 const MAX_CPU_PLAYERS = 7;
+const CPU_DIFFICULTIES = ['easy', 'normal', 'hard'];
 
-function addCpuPlayer() {
+function addCpuPlayer(difficulty) {
     if (!isHost || gameState.phase !== 'LOBBY') return;
     const existingCpuCount = gameState.players.filter(p => p.isCPU).length;
     if (existingCpuCount >= MAX_CPU_PLAYERS) return;
+    if (CPU_DIFFICULTIES.indexOf(difficulty) === -1) difficulty = 'normal';
     const id = 'cpu_' + Math.random().toString(36).slice(2, 9);
     gameState.players.push({
         id, name: `CPU ${existingCpuCount + 1}`, hand: [], wonCards: [], points: 0,
-        currentBid: 0, team: 'UNKNOWN', isCPU: true
+        currentBid: 0, team: 'UNKNOWN', isCPU: true, cpuDifficulty: difficulty
     });
     broadcastState();
 }
@@ -122,11 +124,11 @@ function applySeatSelection() {
     if (seated.length < MIN_PLAYERS) return false;
 
     gameState.players = seated.map(m => ({
-        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN', isCPU: !!m.isCPU
+        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN', isCPU: !!m.isCPU, cpuDifficulty: m.cpuDifficulty
     }));
     gameState.spectators = members
         .filter(m => excluded.has(m.id))
-        .map(m => ({ id: m.id, name: m.name + ' (Spectator)', isCPU: !!m.isCPU }));
+        .map(m => ({ id: m.id, name: m.name + ' (Spectator)', isCPU: !!m.isCPU, cpuDifficulty: m.cpuDifficulty }));
     gameState.lobbyOrder = members.map(m => m.id);
     gameState.disconnectedIds = [];
     gameState.disconnectedAt = {};
@@ -415,7 +417,7 @@ function runCpuBidding() {
 
         let plan = cpuBidPlans[player.id];
         if (!plan) {
-            plan = { maxBid: getCpuMaxBid(player.hand, gameState.players.length), nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
+            plan = { maxBid: getCpuMaxBid(player.hand, gameState.players.length, player.cpuDifficulty), nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
             cpuBidPlans[player.id] = plan;
         }
         if (Date.now() < plan.nextActionAt) return;
@@ -475,7 +477,7 @@ function checkTurnTimeout() {
             cpuMovePlan = { playerId: player.id, actAt: Date.now() + 700 + Math.random() * 1300 };
         }
         if (Date.now() < cpuMovePlan.actAt) return;
-        const card = getBestCardToPlay(player.id, gameState);
+        const card = getBestCardToPlay(player.id, gameState, player.cpuDifficulty);
         cpuMovePlan = null;
         if (card) handlePlayCard(player.id, card);
         else gameState.turnDeadline = null;
@@ -489,7 +491,9 @@ function checkTurnTimeout() {
     if ((isPlayerDisconnected && hasGraceExpired(player.id)) || Date.now() >= gameState.turnDeadline) {
         // Same fairness-respecting algo a CPU uses for its own turns - it only looks at this
         // player's own hand and what's already been played, never at anyone else's cards.
-        const cardToPlay = getBestCardToPlay(player.id, gameState);
+        // Use the strongest tier here: this only fires once in a while for an absent human,
+        // not every second for a live CPU, so the extra cost is a non-issue.
+        const cardToPlay = getBestCardToPlay(player.id, gameState, 'hard');
 
         if (cardToPlay) {
             handlePlayCard(player.id, cardToPlay);

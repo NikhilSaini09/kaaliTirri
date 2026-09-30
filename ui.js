@@ -87,7 +87,8 @@ function renderLobby() {
         if (member.isCPU) {
             const cpuTag = document.createElement('span');
             cpuTag.className = 'cpu-tag';
-            cpuTag.textContent = '🤖 CPU';
+            const diff = member.cpuDifficulty || 'normal';
+            cpuTag.textContent = `🤖 CPU · ${diff.charAt(0).toUpperCase()}${diff.slice(1)}`;
             main.appendChild(cpuTag);
         }
 
@@ -173,8 +174,10 @@ function renderLobby() {
     if (isHost) {
         document.getElementById('startGameBtn').style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
         const addCpuBtn = document.getElementById('addCpuBtn');
+        const difficultySelect = document.getElementById('cpuDifficultySelect');
         if (addCpuBtn) {
             addCpuBtn.style.display = 'inline-block';
+            if (difficultySelect) difficultySelect.style.display = 'inline-block';
             const cpuCount = gameState.players.filter(p => p.isCPU).length;
             addCpuBtn.disabled = cpuCount >= MAX_CPU_PLAYERS;
             addCpuBtn.title = addCpuBtn.disabled ? `Up to ${MAX_CPU_PLAYERS} CPU players` : 'Add a CPU-controlled player';
@@ -377,10 +380,11 @@ function renderGameBoard() {
     });
     gameState.board.forEach((card) => {
         let entry = boardCardCache[card.id];
+        const isKaaliTirri = card.value === '3' && card.suit === '♠';
+        
         if (!entry) {
             const cardEl = createCardElement(card, false);
             cardEl.classList.add('played-card');
-            const isKaaliTirri = card.value === '3' && card.suit === '♠';
             const rotation = (Math.random() * 12 - 6); // pick once, keep for the card's lifetime on the table
 
             if (isKaaliTirri) {
@@ -416,7 +420,7 @@ function renderGameBoard() {
             boardCardCache[card.id] = entry;
             boardArea.appendChild(cardEl);
         }
-        entry.el.classList.toggle('is-winning-card', !!(winningCard && card.id === winningCard.id));
+        entry.el.classList.toggle('is-winning-card', !!(winningCard && card.id === winningCard.id && !isKaaliTirri));
         entry.el.style.transform = `translate(-50%, -50%) rotate(${entry.rotation}deg)`;
 
         const CARD_R = isMobile ? 32 : 30;
@@ -928,7 +932,8 @@ function openWonCardsModal(player) {
 // UI Bindings
 document.getElementById('addCpuBtn')?.addEventListener('click', () => {
     if (!isHost) return;
-    addCpuPlayer();
+    const select = document.getElementById('cpuDifficultySelect');
+    addCpuPlayer(select ? select.value : 'normal');
 });
 
 document.getElementById('startGameBtn').addEventListener('click', () => {

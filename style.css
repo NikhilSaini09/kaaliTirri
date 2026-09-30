@@ -318,6 +318,16 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     border: 1px solid var(--danger);
     border-radius: 999px;
 }
+.cpu-tag {
+    color: var(--brass-300);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border: 1px solid var(--brass-500);
+    border-radius: 999px;
+    white-space: nowrap;
+}
 .lobby-summary {
     margin-top: 14px;
     font-size: 13px;
@@ -342,6 +352,16 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     color: var(--ink);
     border: 1px solid var(--brass-700);
     box-shadow: var(--shadow-soft);
+}
+.lobby-utility-row select {
+    flex: 0 0 auto;
+    margin: 0;
+    font-size: 13px;
+    padding: 0 8px;
+    background: rgba(255,255,255,0.06);
+    color: var(--ivory);
+    border: 1px solid var(--brass-700);
+    border-radius: 8px;
 }
 
 #view-game {

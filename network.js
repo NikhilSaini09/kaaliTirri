@@ -355,7 +355,7 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         gameState.players.push({ id: myPeerId, name: myName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
         
         document.getElementById('roomIdDisplay').textContent = `Room ID: ${id}`;
-        switchView('view-lobby');
+        renderState();
     });
 
     attachHostConnectionHandler();
@@ -374,7 +374,7 @@ document.getElementById('joinBtn').addEventListener('click', () => {
         myPeerId = id;
         connectToHost(roomId, () => {
             hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
-            switchView('view-lobby');
+            renderState();
         });
     });
 });

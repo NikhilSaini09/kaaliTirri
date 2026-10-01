@@ -215,6 +215,7 @@ function handlePlayCard(playerId, playedCard) {
 }
 
 function evaluateTrick() {
+    if(gameState.board.length === 0) return;
     const leadSuit = gameState.board[0].suit;
     let winningCard = gameState.board[0];
 
@@ -410,6 +411,29 @@ function resetBiddingTimer() {
     gameState.biddingDeadline = Date.now() + BIDDING_TIME_MS;
 }
 
+let cpuBidInterval, bidTimeoutInterval, turnTimeoutInterval, trumpTimeoutInterval;
+
+function startGameLoops() {
+    stopGameLoops();
+    const hasCPU = gameState?.players?.some(p => p.isCPU);
+    if (hasCPU) {
+        cpuBidInterval = setInterval(runCpuBidding, 1000);
+    }
+    bidTimeoutInterval = setInterval(checkBiddingTimeout, 1000);
+    turnTimeoutInterval = setInterval(checkTurnTimeout, 1000);
+    trumpTimeoutInterval = setInterval(checkTrumpSelectionTimeout, 1000);
+}
+
+function stopGameLoops() {
+    clearInterval(cpuBidInterval);
+    clearInterval(bidTimeoutInterval);
+    clearInterval(turnTimeoutInterval);
+    clearInterval(trumpTimeoutInterval);
+}
+
+startGameLoops();
+
+
 let cpuBidPlans = {};
 let cpuTrumpPlan = null;
 let cpuMovePlan = null;
@@ -447,7 +471,6 @@ function runCpuBidding() {
 
     if (changed) broadcastState();
 }
-setInterval(runCpuBidding, 1000);
 
 function checkBiddingTimeout() {
     if (!isHost) return;
@@ -470,8 +493,6 @@ function checkBiddingTimeout() {
 
     broadcastState();
 }
-
-setInterval(checkBiddingTimeout, 1000);
 
 function resetTurnTimer() {
     gameState.turnDeadline = Date.now() + TURN_TIME_MS;
@@ -528,7 +549,6 @@ function checkTurnTimeout() {
     }
 }
 
-setInterval(checkTurnTimeout, 1000);
 
 function autoResolveTrumpSelection() {
     gameState.trumpSelectionDeadline = null;
@@ -578,8 +598,6 @@ function checkTrumpSelectionTimeout() {
         broadcastState();
     }
 }
-
-setInterval(checkTrumpSelectionTimeout, 1000);
 
 function togglePause() {
     if (!isHost) return;

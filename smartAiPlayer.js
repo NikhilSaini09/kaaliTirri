@@ -403,6 +403,31 @@ function getBestCardToPlayInner(playerId, state) {
     return chooseCardHeuristic(playerId, state, excludeKaali);
 }
 
+function isTrickWinGuaranteed(state, currentWinnerCard, voidMap) {
+    if (!currentWinnerCard) return false;
+    const cardsPlayedSoFar = state.board.length + 1; 
+    if (cardsPlayedSoFar >= state.players.length) return true;
+
+    const leadSuit = state.board[0].suit;
+    const trumpSuit = state.trumpSuit;
+    const isWinnerTrump = currentWinnerCard.suit === trumpSuit;
+    const winnerRank = getCardRank(currentWinnerCard);
+
+    const playedPlayerIds = new Set(state.board.map(c => c.playedBy));
+    const pendingPlayers = state.players.filter(p => !playedPlayerIds.has(p.id));
+
+    for (const opp of pendingPlayers) {
+        const oppVoids = voidMap[opp.id] || new Set();
+        if (!isWinnerTrump) {
+            if (oppVoids.has(leadSuit) && !oppVoids.has(trumpSuit)) return false;
+        }
+        if (!oppVoids.has(currentWinnerCard.suit) && winnerRank < values.length - 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
 function chooseCardHeuristic(playerId, state, excludeKaali) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
@@ -494,50 +519,107 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         );
         if (guaranteedSuits.length > 0) {
             const safeCards = validCards.filter(c => guaranteedSuits.includes(c.suit));
-            return safeCards.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
+            return safeCards.sort((a, b) => {
+                if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(a) - getCardPoints(b);
+                return getCardRank(a) - getCardRank(b);
+            })[0];
         }
 
-        // Priority 1: play a non-trump Boss card (Guaranteed trick win without wasting trump)
-        let nonTrumpBosses = validCards.filter(c => c.suit !== state.trumpSuit && isBoss(c));
-        if (nonTrumpBosses.length > 0) {
-            return nonTrumpBosses.sort((a,b) => getCardPoints(b) - getCardPoints(a))[0];
+        const affinity = computeTeamAffinity(state);
+        const enemiesHaveNoTrump = others.every(p => {
+            const effectiveTeam = p.team !== 'UNKNOWN' ? p.team : guessTeam(p.id, state, affinity);
+            if (effectiveTeam === myTrueTeam) return true; // Ignore teammates
+            return (voidMap[p.id] || new Set()).has(state.trumpSuit);
+        });
+        
+        // Priority 1: play a Boss card (Guaranteed trick win without wasting trump)
+        let thischanceBosses = validCards.filter(c => isBoss(c));
+        if (thischanceBosses.length > 0) {
+            return thischanceBosses.sort((a,b) => {
+                const aIsTrump = a.suit === state.trumpSuit;
+                const bIsTrump = b.suit === state.trumpSuit;
+                if (aIsTrump !== bIsTrump) {
+                    if (enemiesHaveNoTrump) return aIsTrump ? 1 : -1;
+                    return aIsTrump ? -1 : 1;
+                }
+                return getCardPoints(b) - getCardPoints(a);
+            })[0];
         }
 
-        // Priority 2: Bleed a worthless non-trump card to void a suit safely
+        // Priority 2: play a card (Guaranteed trick win even sometimes making other loose trumps)
+        let highWinCards = [];
+        for (let c of validCards) {
+            const prob = estimateTeamTrickProb(playerId, state, c);
+            if (prob >= 0.82) highWinCards.push(c);
+        }
+        if (highWinCards.length > 0) {
+            return highWinCards.sort((a, b) => {
+                if (a.suit === state.trumpSuit && b.suit !== state.trumpSuit) return 1;
+                if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
+                return getCardRank(b) - getCardRank(a);
+            })[0];
+        }
+
+        // Priority 3: Bleed a worthless non-trump card to void a suit safely
         let trash = validCards.filter(c => c.suit !== state.trumpSuit && getCardPoints(c) === 0);
         if (trash.length > 0) {
             return trash.sort((a,b) => getCardRank(a) - getCardRank(b))[0];
         }
         
-        // Priority 3: Forced to play trump or point cards; play the lowest rank
+        // Priority 4: Forced to play trump or point cards; play the lowest rank
         return validCards.sort((a,b) => getCardRank(a) - getCardRank(b))[0];
     }
 
     // --- STRATEGY SCENARIO 2: MUST FOLLOW SUIT ---
     if (hasLead) {
-        let winningCards = validCards.filter(c => {
-            if (currentWinnerCard.suit === state.trumpSuit && leadSuit !== state.trumpSuit) return false;
-            return getCardRank(c) > getCardRank(currentWinnerCard);
-        });
-
         if (isTeammateWinning) {
-            // Teammate has it. Duck safely by playing the lowest card.
-            return validCards.sort((a,b) => {
+            const isTeammateWinGuaranteed = isTrickWinGuaranteed(state, currentWinnerCard, voidMap);
+            const prob = estimateTeamTrickProb(playerId, state, validCards[0]);
+            if (isTeammateWinGuaranteed || prob >= KAALI_FEED_PROB) {
+                const pointCards = validCards.filter(c => getCardPoints(c) > 0);
+                if (pointCards.length > 0) {
+                    return pointCards.sort((a, b) => {
+                        if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
+                        return getCardRank(a) - getCardRank(b); 
+                    })[0];
+                }
+            }
+
+            // Duck safely
+            const safeDuck = validCards.filter(c => !isKaali(c));
+            const pool = safeDuck.length > 0 ? safeDuck : validCards;
+            return pool.sort((a, b) => {
                 if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(a) - getCardPoints(b);
                 return getCardRank(a) - getCardRank(b);
             })[0];
         } else {
-            // Enemy/Unknown is winning.
+            // Enemy/Unknown is winning
+            let winningCards = validCards.filter(c => {
+                if (currentWinnerCard.suit === state.trumpSuit && leadSuit !== state.trumpSuit) return false;
+                return getCardRank(c) > getCardRank(currentWinnerCard);
+            });
+
             if (winningCards.length > 0) {
-                // Try to beat them as cheaply as possible
-                return winningCards.sort((a,b) => getCardRank(a) - getCardRank(b))[0];
-            } else {
-                // Cannot win. Dump lowest value trash.
-                return validCards.sort((a,b) => {
-                    if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(a) - getCardPoints(b);
-                    return getCardRank(a) - getCardRank(b);
-                })[0];
+                let bestProb = -1;
+                for (let c of winningCards) {
+                    const prob = estimateTeamTrickProb(playerId, state, c);
+                    if (prob > bestProb) bestProb = prob;
+                }
+
+                // If the chance of holding the trick is good enough, play it
+                if (bestProb >= 0.60 || state.board.length + 1 === state.players.length) {
+                    const viable = winningCards.filter(c => estimateTeamTrickProb(playerId, state, c) >= bestProb - 0.05);
+                    return viable.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
+                }
             }
+            
+            // Winning is too risky or impossible. Dump lowest value trash.
+            const nonKaali = validCards.filter(c => !isKaali(c));
+            const dumpPool = nonKaali.length > 0 ? nonKaali : validCards;
+            return dumpPool.sort((a, b) => {
+                if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(a) - getCardPoints(b);
+                return getCardRank(a) - getCardRank(b);
+            })[0];
         }
     }
 
@@ -546,14 +628,32 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
     let nonTrumps = validCards.filter(c => c.suit !== state.trumpSuit);
 
     if (isTeammateWinning) {
-        // Teammate is winning! Feed them points (up to 10pts, keep 30pt Kaali Tirri safe just in case).
-        if (nonTrumps.length > 0) {
-            let safePointsToFeed = nonTrumps.filter(c => getCardPoints(c) <= 10);
-            if (safePointsToFeed.length > 0) return safePointsToFeed.sort((a,b) => getCardPoints(b) - getCardPoints(a))[0];
-            return nonTrumps.sort((a,b) => getCardRank(a) - getCardRank(b))[0];
+        const isTeammateWinGuaranteed = isTrickWinGuaranteed(state, currentWinnerCard, voidMap);
+        const prob = estimateTeamTrickProb(playerId, state, validCards[0]);
+        if (isTeammateWinGuaranteed || prob >= KAALI_FEED_PROB) {
+            const pointCards = validCards.filter(c => getCardPoints(c) > 0);
+            if (pointCards.length > 0) {
+                return pointCards.sort((a, b) => {
+                    if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
+                    return getCardRank(a) - getCardRank(b); 
+                })[0];
+            }
         }
-        // Forced to trump a trick our team is already winning. Play lowest trump.
-        return trumps.sort((a,b) => getCardRank(a) - getCardRank(b))[0];
+
+        if (nonTrumps.length > 0 && prob >= 0.60) {
+            let safePointsToFeed = nonTrumps.filter(c => getCardPoints(c) <= 10);
+            if (safePointsToFeed.length > 0) return safePointsToFeed.sort((a, b) => getCardPoints(b) - getCardPoints(a))[0];
+
+            return nonTrumps.sort((a, b) => getCardPoints(a) - getCardPoints(b))[0];
+        }
+        
+        if (nonTrumps.length > 0) {
+            let safeZero = nonTrumps.filter(c => getCardPoints(c) === 0);
+            if (safeZero.length > 0) return safeZero.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
+
+            return nonTrumps.sort((a, b) => getCardPoints(a) - getCardPoints(b))[0];
+        }
+        return trumps.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
     } else {
         // Enemy is winning. Should we trump it?
         let winningTrumps = trumps.filter(c => {
@@ -562,9 +662,18 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         });
 
         if (winningTrumps.length > 0) {
-            // Trump if the trick is juicy (>= 10 points) OR if we have a cheap 0-point trump to spare
-            if (trickPoints >= 10 || getCardPoints(winningTrumps[0]) === 0) {
-                return winningTrumps.sort((a,b) => getCardRank(a) - getCardRank(b))[0];
+            let bestProb = -1;
+            for (let c of winningTrumps) {
+                const prob = estimateTeamTrickProb(playerId, state, c);
+                if (prob > bestProb) bestProb = prob;
+            }
+
+            if (bestProb >= 0.45 || state.board.length + 1 === state.players.length) {
+                const viable = winningTrumps.filter(c => estimateTeamTrickProb(playerId, state, c) >= bestProb - 0.05);
+                const cheapest = viable.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
+                if (trickPoints >= 10 || getCardPoints(cheapest) === 0 || bestProb >= 0.8) {
+                    return cheapest;
+                }
             }
         }
 
@@ -773,8 +882,8 @@ function getBestCardToPlayEndgame(playerId, state, legalCards) {
 // ---------------------------------------------------------------------------------------
 
 const BID_SIM_SAMPLES = 40;      // playouts per bid decision (~2ms each)
-const BID_RISK_LAMBDA = 0.75;   // std-devs below the expected score we bid (tuned via self-play sweep)
-const BID_MIN_SIGMA = 8;        // floor on the spread so a near-deterministic sim (2p) still gets a margin
+const BID_RISK_LAMBDA = 0.62;   // std-devs below the expected score we bid (tuned via self-play sweep)
+const BID_MIN_SIGMA = 6;        // floor on the spread so a near-deterministic sim (2p) still gets a margin
 const TOTAL_POINTS = 250;
 
 function simulateHandAsBidder(hand, numPlayers) {
@@ -857,7 +966,7 @@ function getCpuMaxBid(hand, numPlayers) {
     if (dist) {
         ceiling = dist.mean - BID_RISK_LAMBDA * Math.max(dist.sd, BID_MIN_SIGMA);
     } else {
-        ceiling = TOTAL_POINTS * getTeamStructure(numPlayers).share * 0.9;
+        ceiling = TOTAL_POINTS * getTeamStructure(numPlayers).share * 0.95;
     }
     ceiling = Math.min(MAX_BID, ceiling);
     return Math.floor(ceiling / 5) * 5;
@@ -893,29 +1002,46 @@ function getCpuTrumpChoice(player, numPlayers) {
     const allowedCards = Math.floor((numPlayers - 2) / 2);
     const ownSet = new Set(player.hand.map(c => `${c.value}${c.suit}`));
     const evicted = getEvictedCardSet(numPlayers);
-    const calls = [];
-    const priorityValues = ['A', 'K', 'Q', 'J', '10'];
-    outer:
-    for (const v of priorityValues) {
-        for (const s of suits) {
-            if (calls.length >= allowedCards) break outer;
+    
+    let candidateScores = [];
+    suits.forEach(s => {
+        values.forEach(v => {
             const code = `${v}${s}`;
-            if (evicted.has(code)) continue; // doesn't exist in this deal at all
-            if (!ownSet.has(code) && calls.indexOf(code) === -1) calls.push(code);
-        }
-    }
-    // Extremely unlikely (would need most of A/K/Q/J/10 across all suits owned or evicted),
-    // but fall back to the full rank list rather than ever call fewer cards than allowed.
-    if (calls.length < allowedCards) {
-        outerFallback:
-        for (let i = values.length - 1; i >= 0; i--) {
-            for (const s of suits) {
-                if (calls.length >= allowedCards) break outerFallback;
-                const code = `${values[i]}${s}`;
-                if (evicted.has(code) || ownSet.has(code) || calls.indexOf(code) !== -1) continue;
-                calls.push(code);
+            if (ownSet.has(code) || evicted.has(code)) return;
+            if (v === '3' && s === '♠') return; 
+            
+            let score = 0;
+            const isTrump = s === bestSuit;
+            const isSpade = s === '♠';
+            
+            if (isTrump) {
+                if (v === 'A') score = 200;
+                else if (v === 'K') score = 180;
+                else if (v === 'Q') score = 160;
+                else if (v === 'J') score = 70;
+                else if (v === '10') score = 65;
+                else score = getCardRank({value: v}) + 10;
+            } else if (isSpade) {
+                if (v === 'A') score = 150;
+                else if (v === 'K') score = 130;
+                else if (v === 'Q') score = 110;
+                else if (v === 'J') score = 50;
+                else if (v === '10') score = 45;
+                else score = getCardRank({value: v});
+            } else {
+                if (v === 'A') score = 100;
+                else if (v === 'K') score = 80;
+                else if (v === 'Q') score = 60;
+                else if (v === 'J') score = 40;
+                else if (v === '10') score = 35;
+                else score = getCardRank({value: v});
             }
-        }
-    }
+            candidateScores.push({ code, score });
+        });
+    });
+
+    candidateScores.sort((a, b) => b.score - a.score);
+    const calls = candidateScores.slice(0, allowedCards).map(c => c.code);
+
     return { suit: bestSuit, calls: calls };
 }

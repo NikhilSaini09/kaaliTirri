@@ -281,6 +281,30 @@ function attachHostConnectionHandler() {
     });
 }
 
+function updateRoomIdDisplay(id) {
+    const display = document.getElementById('roomIdDisplay');
+    if (!display) return;
+    
+    display.innerHTML = `Room ID: <b style="letter-spacing: 1px;">${id}</b> <button id="copyRoomIdBtn" style="margin-left: 12px; padding: 4px 10px; font-size: 12px;" class="btn-ghost" title="Copy Room ID"> 📋 </button>`;
+    
+    const copyBtn = document.getElementById('copyRoomIdBtn');
+    if (copyBtn) {
+        copyBtn.onclick = () => {
+            navigator.clipboard.writeText(id).catch(() => {});
+            copyBtn.textContent = ' ✓ ';
+            copyBtn.style.color = 'var(--success)';
+            copyBtn.style.borderColor = 'var(--success)';
+            setTimeout(() => { 
+                if (document.getElementById('copyRoomIdBtn')) {
+                    document.getElementById('copyRoomIdBtn').textContent = ' 📋 ';
+                    document.getElementById('copyRoomIdBtn').style.color = 'var(--ivory)';
+                    document.getElementById('copyRoomIdBtn').style.borderColor = 'rgba(255,255,255,0.2)';
+                }
+            }, 2000);
+        };
+    }
+}
+
 function promoteToHost(targetId) {
     if (!isHost) return;
     if (targetId === myPeerId) return;
@@ -302,7 +326,7 @@ function promoteToHost(targetId) {
 function connectToHost(targetId, onFirstJoin) {
     if (hostConnection) { try { hostConnection.close(); } catch (e) {} }
     hostConnection = peer.connect(targetId);
-    document.getElementById('roomIdDisplay').textContent = `Room ID: ${targetId}`;
+    updateRoomIdDisplay(targetId);
 
     hostConnection.on('open', () => { if (onFirstJoin) onFirstJoin(); });
 
@@ -335,7 +359,7 @@ function connectToHost(targetId, onFirstJoin) {
 
             const oldHostConn = hostConnection;
             hostConnection = null;
-            document.getElementById('roomIdDisplay').textContent = `Room ID: ${myPeerId}`;
+            updateRoomIdDisplay(myPeerId);
             try { oldHostConn.send({ type: 'PROMOTION_READY' }); } catch (e) {}
             renderState();
         }
@@ -359,7 +383,7 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         isHost = true;
         gameState.players.push({ id: myPeerId, name: myName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
         
-        document.getElementById('roomIdDisplay').textContent = `Room ID: ${id}`;
+        updateRoomIdDisplay(id);
         renderState();
     });
 

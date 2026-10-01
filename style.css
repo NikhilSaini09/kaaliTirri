@@ -222,7 +222,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 #view-lobby {
     width: 92%;
-    max-width: 600px;
+    max-width: 650px;
     margin: 6vh auto;
     background: linear-gradient(180deg, var(--walnut-700), var(--walnut-900));
     border: 1px solid var(--brass-700);
@@ -230,6 +230,10 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     border-radius: 16px;
     text-align: center;
     box-shadow: var(--shadow-deep);
+
+    max-height: 88dvh;
+    display: flex;
+    flex-direction: column;
 }
 
 #view-lobby h2 { color: var(--brass-300); margin-bottom: 20px; }
@@ -252,6 +256,10 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     flex-direction: column;
     gap: 8px;
     text-align: left;
+
+    overflow-y: auto;
+    padding-right: 4px;
+    flex: 1 1 auto;
 }
 
 .lobby-player-row {

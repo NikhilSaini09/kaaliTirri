@@ -177,15 +177,20 @@ function renderLobby() {
         + (outCount ? ` \u00b7 ${outCount} spectating` : '')
         + (goneCount ? ` \u00b7 ${goneCount} disconnected` : '');
 
+    const startBtn = document.getElementById('startGameBtn');
+    const addCpuBtn = document.getElementById('addCpuBtn');
+
     if (isHost) {
-        document.getElementById('startGameBtn').style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
-        const addCpuBtn = document.getElementById('addCpuBtn');
+        if(startBtn) startBtn.style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
         if (addCpuBtn) {
             addCpuBtn.style.display = 'inline-block';
             const cpuCount = gameState.players.filter(p => p.isCPU).length;
             addCpuBtn.disabled = cpuCount >= MAX_CPU_PLAYERS;
             addCpuBtn.title = addCpuBtn.disabled ? `Up to ${MAX_CPU_PLAYERS} CPU players` : 'Add a CPU-controlled player';
         }
+    } else {
+        if (startBtn) startBtn.style.display = 'none';
+        if (addCpuBtn) addCpuBtn.style.display = 'none';
     }
 }
 
@@ -782,6 +787,15 @@ function normalizeName(name) {
 }
 
 function saveGame() {
+    if (gameState.phase === 'TRICK_EVALUATION') {
+        if (trickEvalTimeout) {
+            clearTimeout(trickEvalTimeout);
+            trickEvalTimeout = null;
+        }
+        evaluateTrick();
+        broadcastState();
+    }
+
     const payload = {
         gameState: gameState,
         gameStats: gameStats,
@@ -801,6 +815,11 @@ function loadGame(event) {
     if (!isHost) {
         alert("Only the room host can load save files.");
         return;
+    }
+
+    if (trickEvalTimeout) {
+        clearTimeout(trickEvalTimeout);
+        trickEvalTimeout = null;
     }
 
     const file = event.target.files[0];
@@ -903,6 +922,8 @@ function loadGame(event) {
                 gameState = parsed.gameState;
                 gameStats = parsed.gameStats || {};
 
+                if (typeof startGameLoops === 'function') startGameLoops();
+
                 broadcastState();
             } else {
                 throw new Error("Invalid structure");
@@ -950,6 +971,9 @@ document.getElementById('startGameBtn').addEventListener('click', () => {
         alert(`Tick at least ${MIN_PLAYERS} players to start.`);
         return;
     }
+
+    if (typeof startGameLoops === 'function') startGameLoops();
+
     startDeal();
     broadcastState();
 });
@@ -960,6 +984,8 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
             clearTimeout(trickEvalTimeout);
             trickEvalTimeout = null;
         }
+
+        if (typeof stopGameLoops === 'function') stopGameLoops();
 
         gameState.phase = 'LOBBY';
 

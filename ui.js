@@ -10,19 +10,26 @@ function switchView(viewId) {
     document.getElementById(viewId).style.display = 'flex';
 }
 
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let audioCtx = null;
+function getAudioCtx() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+}
 function playTone(freq, type, duration, vol) {
-    if(audioCtx.state === 'suspended') audioCtx.resume();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
     osc.type = type;
-    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
     osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    gain.connect(ctx.destination);
     osc.start();
-    osc.stop(audioCtx.currentTime + duration);
+    osc.stop(ctx.currentTime + duration);
 }
 function playCardSound() { playTone(250, 'triangle', 0.1, 0.4); }
 function playKaaliTirriSound() { playTone(300, 'sawtooth', 0.2, 0.5); setTimeout(() => playTone(600, 'square', 0.4, 0.4), 100); }
@@ -84,6 +91,13 @@ function renderLobby() {
         nameEl.textContent = cleanPlayerName(member.name);
         main.appendChild(nameEl);
 
+        if (member.isCPU) {
+            const cpuTag = document.createElement('span');
+            cpuTag.className = 'cpu-tag';
+            cpuTag.textContent = `🤖 · AI`;
+            main.appendChild(cpuTag);
+        }
+
         if (member.id === myPeerId) {
             const you = document.createElement('span');
             you.className = 'you-tag';
@@ -124,7 +138,7 @@ function renderLobby() {
             controls.appendChild(up);
             controls.appendChild(down);
 
-            const isEligibleForHost = member.id !== myPeerId && !isGone &&
+            const isEligibleForHost = member.id !== myPeerId && !isGone && !member.isCPU &&
                 gameState.players.some(p => p.id === member.id);
             if (isEligibleForHost) {
                 const makeHost = document.createElement('button');
@@ -144,7 +158,7 @@ function renderLobby() {
                 const kick = document.createElement('button');
                 kick.className = 'btn-danger';
                 kick.style.cssText = 'padding: 5px 12px; font-size: 13px;';
-                kick.textContent = 'Kick';
+                kick.textContent = member.isCPU ? 'Remove' : 'Kick';
                 kick.addEventListener('click', () => kickPlayer(member.id));
                 controls.appendChild(kick);
             }
@@ -163,8 +177,20 @@ function renderLobby() {
         + (outCount ? ` \u00b7 ${outCount} spectating` : '')
         + (goneCount ? ` \u00b7 ${goneCount} disconnected` : '');
 
+    const startBtn = document.getElementById('startGameBtn');
+    const addCpuBtn = document.getElementById('addCpuBtn');
+
     if (isHost) {
-        document.getElementById('startGameBtn').style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
+        if(startBtn) startBtn.style.display = seatedCount >= MIN_PLAYERS ? 'block' : 'none';
+        if (addCpuBtn) {
+            addCpuBtn.style.display = 'inline-block';
+            const cpuCount = gameState.players.filter(p => p.isCPU).length;
+            addCpuBtn.disabled = cpuCount >= MAX_CPU_PLAYERS;
+            addCpuBtn.title = addCpuBtn.disabled ? `Up to ${MAX_CPU_PLAYERS} CPU players` : 'Add a CPU-controlled player';
+        }
+    } else {
+        if (startBtn) startBtn.style.display = 'none';
+        if (addCpuBtn) addCpuBtn.style.display = 'none';
     }
 }
 
@@ -232,6 +258,7 @@ let hasAutoFocusedBidOnce = false;
 let trumpPanelWasOpen = false;
 
 let lastHandIds = null;
+const prefersReducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 let boardCardCache = {};
 let lastOppSignature = null;
 
@@ -286,6 +313,16 @@ function renderGameBoard() {
     if (gameState.phase === 'BIDDING' && gameState.biddingDeadline) {
         timerWrap.classList.add('is-visible');
         startTimerBarLoop(gameState.biddingDeadline, BIDDING_TIME_MS, 'Bidding');
+    } else if (gameState.phase === 'TRUMP_SELECTION' && gameState.trumpSelectionDeadline) {
+        timerWrap.classList.add('is-visible');
+        const bidder = gameState.players.find(p => p.id === gameState.highestBid.playerId);
+        const bidderName = bidder ? cleanPlayerName(bidder.name) : cleanPlayerName(gameState.highestBid.playerName || '');
+        const isMe = gameState.highestBid.playerId === myPeerId;
+        startTimerBarLoop(
+            gameState.trumpSelectionDeadline,
+            TRUMP_SELECTION_TIME_MS, 
+            isMe ? 'Choose Trump' : `${bidderName} choosing trump`
+        );
     } else if (gameState.phase === 'PLAYING' && gameState.turnDeadline) {
         timerWrap.classList.add('is-visible');
         const turnName = activeTurnPlayer ? cleanPlayerName(activeTurnPlayer.name) : '';
@@ -362,15 +399,42 @@ function renderGameBoard() {
     });
     gameState.board.forEach((card) => {
         let entry = boardCardCache[card.id];
+        const isKaaliTirri = card.value === '3' && card.suit === '♠';
+
         if (!entry) {
             const cardEl = createCardElement(card, false);
             cardEl.classList.add('played-card');
             const rotation = (Math.random() * 12 - 6);
+
+            if (isKaaliTirri) {
+                cardEl.classList.add('is-kaali-tirri');
+            } else {
+                let dx = 0, dy = 46;
+                if (card.playedBy !== myPeerId && seatAngle[card.playedBy] !== undefined) {
+                    const ang = seatAngle[card.playedBy];
+                    dx = Math.cos(ang) * 46;
+                    dy = Math.sin(ang) * 46;
+                }
+                if (prefersReducedMotion) {
+                    cardEl.style.opacity = '1';
+                } else {
+                    cardEl.style.translate = `${dx}px ${dy}px`;
+                    cardEl.style.scale = '0.5';
+                    cardEl.style.opacity = '0';
+                    requestAnimationFrame(() => {
+                        cardEl.style.transition = 'translate 0.32s cubic-bezier(.22,.75,.3,1.1), scale 0.32s cubic-bezier(.22,.75,.3,1.1), opacity 0.22s ease';
+                        cardEl.style.translate = '0px 0px';
+                        cardEl.style.scale = '1';
+                        cardEl.style.opacity = '1';
+                    });
+                }
+            }
+
             entry = { el: cardEl, rotation };
             boardCardCache[card.id] = entry;
             boardArea.appendChild(cardEl);
         }
-        entry.el.classList.toggle('is-winning-card', !!(winningCard && card.id === winningCard.id));
+        entry.el.classList.toggle('is-winning-card', !!(winningCard && card.id === winningCard.id && !isKaaliTirri));
         entry.el.style.transform = `translate(-50%, -50%) rotate(${entry.rotation}deg)`;
 
         const CARD_R = isMobile ? 32 : 30;
@@ -416,7 +480,7 @@ function renderGameBoard() {
             oppDiv.style.transform = 'translate(-50%, -50%)';
         }
 
-        let teamIcon = player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : '');
+        let teamIcon = (player.team === 'BIDDER_TEAM' ? '🔥 ' : (player.team === 'DEFENDER_TEAM' ? '🛡️ ' : ''));
         const cleanName = cleanPlayerName(player.name);
 
         let pileHtml = '';
@@ -612,7 +676,11 @@ function renderGameBoard() {
                         rankSelect.id = `team-rank-${i}`;
                         rankSelect.name = `team-rank-${i}`;
                         rankSelect.setAttribute('aria-label', `Partner card ${i + 1} rank`);
-                        values.forEach(v => rankSelect.appendChild(new Option(v, v)));
+                        values.forEach(v => {
+                            const opt = new Option(v, v);
+                            if (v === 'A') opt.selected = true;
+                            rankSelect.appendChild(opt);
+                        });
 
                         const suitSelect = document.createElement('select');
                         suitSelect.className = 'team-suit-select';
@@ -719,6 +787,15 @@ function normalizeName(name) {
 }
 
 function saveGame() {
+    if (gameState.phase === 'TRICK_EVALUATION') {
+        if (trickEvalTimeout) {
+            clearTimeout(trickEvalTimeout);
+            trickEvalTimeout = null;
+        }
+        evaluateTrick();
+        broadcastState();
+    }
+
     const payload = {
         gameState: gameState,
         gameStats: gameStats,
@@ -740,6 +817,11 @@ function loadGame(event) {
         return;
     }
 
+    if (trickEvalTimeout) {
+        clearTimeout(trickEvalTimeout);
+        trickEvalTimeout = null;
+    }
+
     const file = event.target.files[0];
     if (!file) return;
 
@@ -752,8 +834,8 @@ function loadGame(event) {
                 playerData = parsed.playerData || [];
                 
                 let allCurrentUsers = [];
-                gameState.players.forEach(p => { if (!isDisconnected(p.id)) allCurrentUsers.push({ id: p.id, name: p.name }); });
-                (gameState.spectators || []).forEach(s => { if (!isDisconnected(s.id)) allCurrentUsers.push({ id: s.id, name: s.name }); });
+                gameState.players.forEach(p => { if (!p.isCPU && !isDisconnected(p.id)) allCurrentUsers.push({ id: p.id, name: p.name }); });
+                (gameState.spectators || []).forEach(s => { if (!s.isCPU && !isDisconnected(s.id)) allCurrentUsers.push({ id: s.id, name: s.name }); });
                 
                 let uniqueUsers = Array.from(new Map(allCurrentUsers.map(item => [item.id, item])).values());
                 let currentPool = [...uniqueUsers];
@@ -762,8 +844,13 @@ function loadGame(event) {
                 
                 let newPlayers = new Array(parsed.gameState.players.length).fill(null);
 
+                parsed.gameState.players.forEach((savedPlayer, index) => {
+                    if (savedPlayer.isCPU) newPlayers[index] = savedPlayer;
+                });
+
                 // PASS 1: Robust normalized name matching
                 parsed.gameState.players.forEach((savedPlayer, index) => {
+                    if (newPlayers[index]) return;
                     const matchIndex = currentPool.findIndex(p => normalizeName(p.name) === normalizeName(savedPlayer.name));
                     if (matchIndex !== -1) {
                         const matchedConn = currentPool.splice(matchIndex, 1)[0];
@@ -835,6 +922,8 @@ function loadGame(event) {
                 gameState = parsed.gameState;
                 gameStats = parsed.gameStats || {};
 
+                if (typeof startGameLoops === 'function') startGameLoops();
+
                 broadcastState();
             } else {
                 throw new Error("Invalid structure");
@@ -871,18 +960,33 @@ function openWonCardsModal(player) {
 }
 
 // UI Bindings
+document.getElementById('addCpuBtn')?.addEventListener('click', () => {
+    if (!isHost) return;
+    addCpuPlayer();
+});
+
 document.getElementById('startGameBtn').addEventListener('click', () => {
     if (!isHost) return;
     if (!applySeatSelection()) {
         alert(`Tick at least ${MIN_PLAYERS} players to start.`);
         return;
     }
+
+    if (typeof startGameLoops === 'function') startGameLoops();
+
     startDeal();
     broadcastState();
 });
 
 document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
     if (isHost) {
+        if (typeof trickEvalTimeout !== 'undefined' && trickEvalTimeout) {
+            clearTimeout(trickEvalTimeout);
+            trickEvalTimeout = null;
+        }
+
+        if (typeof stopGameLoops === 'function') stopGameLoops();
+
         gameState.phase = 'LOBBY';
 
         gameState.excludedIds = (gameState.spectators || []).map(sp => sp.id);
@@ -961,6 +1065,18 @@ function closeWonCardsModal() {
 }
 document.getElementById('closeWonCardsBtn')?.addEventListener('click', closeWonCardsModal);
 document.getElementById('won-cards-modal-backdrop')?.addEventListener('click', closeWonCardsModal);
+
+function openHowToPlay() {
+    document.getElementById('how-to-play-modal').style.display = 'block';
+    document.getElementById('how-to-play-backdrop').style.display = 'block';
+}
+function closeHowToPlay() {
+    document.getElementById('how-to-play-modal').style.display = 'none';
+    document.getElementById('how-to-play-backdrop').style.display = 'none';
+}
+document.getElementById('howToPlayBtn')?.addEventListener('click', openHowToPlay);
+document.getElementById('closeHowToPlayBtn')?.addEventListener('click', closeHowToPlay);
+document.getElementById('how-to-play-backdrop')?.addEventListener('click', closeHowToPlay);
 
 function closeHostMenu() {
     const menu = document.getElementById('host-dropdown');

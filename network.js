@@ -29,6 +29,16 @@ function broadcastState() {
     renderState(); 
 }
 
+function sendGameStats() {
+    if (!isHost) return;
+
+    Object.values(connections).forEach(conn => {
+        try {
+            conn.send({ type: 'GAME_STATS_UPDATE', stats : gameStats });
+        } catch (e) {}
+    });
+}
+
 function kickPlayer(targetId) {
     if (!isHost) return;
     if (connections[targetId]) {
@@ -44,6 +54,7 @@ function kickPlayer(targetId) {
     gameState.lobbyOrder = (gameState.lobbyOrder || []).filter(id => id !== targetId);
     gameState.disconnectedIds = (gameState.disconnectedIds || []).filter(id => id !== targetId);
     if (gameState.disconnectedAt) delete gameState.disconnectedAt[targetId];
+    if (typeof cpuBidPlans !== 'undefined') delete cpuBidPlans[targetId];
     broadcastState();
 }
 
@@ -140,7 +151,9 @@ function attachHostConnectionHandler() {
         connections[conn.peer] = conn;
         lastSeen[conn.peer] = Date.now();
 
-        try { conn.send({ type: 'STATE_UPDATE', state: getSanitizedStateForClient(conn.peer) }); } catch (e) {}
+        conn.on('open', () => {
+            try { conn.send({ type: 'STATE_UPDATE', state: getSanitizedStateForClient(conn.peer) }); } catch (e) {}
+        });
 
         conn.on('close', () => markDisconnected(conn.peer));
 
@@ -256,10 +269,40 @@ function attachHostConnectionHandler() {
                     }
                 });
                 isHost = false;
+
+                if (typeof peer.removeAllListeners === 'function') peer.removeAllListeners('connection');
+                Object.values(connections).forEach(c => { try { c.close(); } catch (e) {} });
+                connections = {};
+
                 connectToHost(conn.peer);
+                renderState();
             }
         });
     });
+}
+
+function updateRoomIdDisplay(id) {
+    const display = document.getElementById('roomIdDisplay');
+    if (!display) return;
+    
+    display.innerHTML = `Room ID: <b style="letter-spacing: 1px;">${id}</b> <button id="copyRoomIdBtn" style="margin-left: 12px; padding: 4px 10px; font-size: 12px;" class="btn-ghost" title="Copy Room ID"> 📋 </button>`;
+    
+    const copyBtn = document.getElementById('copyRoomIdBtn');
+    if (copyBtn) {
+        copyBtn.onclick = () => {
+            navigator.clipboard.writeText(id).catch(() => {});
+            copyBtn.textContent = ' ✓ ';
+            copyBtn.style.color = 'var(--success)';
+            copyBtn.style.borderColor = 'var(--success)';
+            setTimeout(() => { 
+                if (document.getElementById('copyRoomIdBtn')) {
+                    document.getElementById('copyRoomIdBtn').textContent = ' 📋 ';
+                    document.getElementById('copyRoomIdBtn').style.color = 'var(--ivory)';
+                    document.getElementById('copyRoomIdBtn').style.borderColor = 'rgba(255,255,255,0.2)';
+                }
+            }, 2000);
+        };
+    }
 }
 
 function promoteToHost(targetId) {
@@ -270,6 +313,7 @@ function promoteToHost(targetId) {
     if (isDisconnected(targetId)) { alert("That player is disconnected."); return; }
     const targetPlayer = gameState.players.find(p => p.id === targetId);
     if (!targetPlayer) { alert("Only an active player can be made host."); return; }
+    if (targetPlayer.isCPU) { alert("A CPU player can't be made host."); return; }
 
     const mePlayer = gameState.players.find(p => p.id === myPeerId);
     if (mePlayer) mePlayer.name = mePlayer.name.replace(' (Host)', '').trim();
@@ -282,7 +326,7 @@ function promoteToHost(targetId) {
 function connectToHost(targetId, onFirstJoin) {
     if (hostConnection) { try { hostConnection.close(); } catch (e) {} }
     hostConnection = peer.connect(targetId);
-    document.getElementById('roomIdDisplay').textContent = `Room ID: ${targetId}`;
+    updateRoomIdDisplay(targetId);
 
     hostConnection.on('open', () => { if (onFirstJoin) onFirstJoin(); });
 
@@ -290,6 +334,9 @@ function connectToHost(targetId, onFirstJoin) {
         if (data.type === 'STATE_UPDATE') {
             gameState = data.state;
             renderState(); 
+        }
+        if (data.type === 'GAME_STATS_UPDATE') {
+            gameStats = data.stats;
         }
         if (data.type === 'KICKED') {
             alert("You have been kicked by the host.");
@@ -312,7 +359,7 @@ function connectToHost(targetId, onFirstJoin) {
 
             const oldHostConn = hostConnection;
             hostConnection = null;
-            document.getElementById('roomIdDisplay').textContent = `Room ID: ${myPeerId}`;
+            updateRoomIdDisplay(myPeerId);
             try { oldHostConn.send({ type: 'PROMOTION_READY' }); } catch (e) {}
             renderState();
         }
@@ -336,8 +383,8 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         isHost = true;
         gameState.players.push({ id: myPeerId, name: myName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
         
-        document.getElementById('roomIdDisplay').textContent = `Room ID: ${id}`;
-        switchView('view-lobby');
+        updateRoomIdDisplay(id);
+        renderState();
     });
 
     attachHostConnectionHandler();
@@ -356,7 +403,7 @@ document.getElementById('joinBtn').addEventListener('click', () => {
         myPeerId = id;
         connectToHost(roomId, () => {
             hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
-            switchView('view-lobby');
+            renderState();
         });
     });
 });

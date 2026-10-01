@@ -23,6 +23,7 @@ function sortHand(hand) {
 const MIN_BID = 130;
 const MAX_BID = 250;
 const BIDDING_TIME_MS = 30000;
+const TRUMP_SELECTION_TIME_MS = 60000;
 const TURN_TIME_MS = 30000;
 const RECONNECT_GRACE_MS = 5000;
 
@@ -60,8 +61,8 @@ function stripSpectatorTag(name) {
 
 function getLobbyMembers() {
     const members = [
-        ...gameState.players.map(p => ({ id: p.id, name: p.name })),
-        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name) }))
+        ...gameState.players.map(p => ({ id: p.id, name: p.name, isCPU: !!p.isCPU })),
+        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU }))
     ];
     const order = gameState.lobbyOrder || [];
     const rank = id => { const i = order.indexOf(id); return i === -1 ? order.length : i; };
@@ -90,6 +91,20 @@ function toggleSeat(targetId) {
     broadcastState();
 }
 
+const MAX_CPU_PLAYERS = 7;
+
+function addCpuPlayer() {
+    if (!isHost || gameState.phase !== 'LOBBY') return;
+    const existingCpuCount = gameState.players.filter(p => p.isCPU).length;
+    if (existingCpuCount >= MAX_CPU_PLAYERS) return;
+    const id = 'cpu_' + Math.random().toString(36).slice(2, 9);
+    gameState.players.push({
+        id, name: `BOT${existingCpuCount + 1}`, hand: [], wonCards: [], points: 0,
+        currentBid: 0, team: 'UNKNOWN', isCPU: true
+    });
+    broadcastState();
+}
+
 function moveMember(targetId, dir) {
     if (!isHost || gameState.phase !== 'LOBBY') return;
     const order = getLobbyMembers().map(m => m.id);
@@ -108,11 +123,11 @@ function applySeatSelection() {
     if (seated.length < MIN_PLAYERS) return false;
 
     gameState.players = seated.map(m => ({
-        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN'
+        id: m.id, name: m.name, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN', isCPU: !!m.isCPU
     }));
     gameState.spectators = members
         .filter(m => excluded.has(m.id))
-        .map(m => ({ id: m.id, name: m.name + ' (Spectator)' }));
+        .map(m => ({ id: m.id, name: m.name + ' (Spectator)', isCPU: !!m.isCPU }));
     gameState.lobbyOrder = members.map(m => m.id);
     gameState.disconnectedIds = [];
     gameState.disconnectedAt = {};
@@ -153,6 +168,7 @@ function isCardPlayable(playerId, card) {
     return true; 
 }
 
+let trickEvalTimeout = null;
 function handlePlayCard(playerId, playedCard) {
     if (gameState.isPaused) return;
     if (!playedCard || !playedCard.id) return;
@@ -188,7 +204,7 @@ function handlePlayCard(playerId, playedCard) {
     if (gameState.board.length === gameState.players.length) {
         gameState.phase = 'TRICK_EVALUATION';
         gameState.turnDeadline = null;
-        setTimeout(() => {
+        trickEvalTimeout = setTimeout(() => {
             evaluateTrick();
             broadcastState();
         }, 2000);
@@ -199,6 +215,7 @@ function handlePlayCard(playerId, playedCard) {
 }
 
 function evaluateTrick() {
+    if(gameState.board.length === 0) return;
     const leadSuit = gameState.board[0].suit;
     let winningCard = gameState.board[0];
 
@@ -216,6 +233,7 @@ function evaluateTrick() {
         }
     }
 
+    if (gameState.players.some(p => p.isCPU) && typeof cpuObserveTrick === 'function') cpuObserveTrick(gameState, gameState.board, winningCard.playedBy);
     const trickPoints = gameState.board.reduce((sum, c) => sum + getCardPoints(c), 0);
     const winnerIndex = gameState.players.findIndex(p => p.id === winningCard.playedBy);
     
@@ -267,6 +285,8 @@ function evaluateRoundEnd() {
 
         gameStats[cleanName].winRate = ((gameStats[cleanName].wins / gameStats[cleanName].gamesPlayed) * 100).toFixed(2) + '%';
     });
+
+    if (typeof sendGameStats === 'function') sendGameStats();
 }
 
 const EVICTION_ORDER = [];
@@ -278,6 +298,11 @@ for (let v of evictionValues) {
     }
 }
 function startDeal() {
+    if (trickEvalTimeout) {
+        clearTimeout(trickEvalTimeout);
+        trickEvalTimeout = null;
+    }
+
     let fullDeck = generateDeck();
     shuffle(fullDeck);
     shuffle(fullDeck);
@@ -315,7 +340,12 @@ function startDeal() {
     gameState.isPaused = false;
     gameState.pausedRemaining = null;
 
-    let currentPlayer = 0;
+    cpuBidPlans = {};
+    cpuTrumpPlan = null;
+    cpuMovePlan = null;
+
+    gameState.dealerIndex = (gameState.dealerIndex + 1) % numPlayers;
+    let currentPlayer = (gameState.dealerIndex + 1) % numPlayers;
     while (gameState.deck.length > 0) {
         gameState.players[currentPlayer].hand.push(gameState.deck.pop());
         currentPlayer = (currentPlayer + 1) % numPlayers;
@@ -328,7 +358,7 @@ function startDeal() {
 function enterTrumpSelection() {
     gameState.phase = 'TRUMP_SELECTION';
     gameState.biddingDeadline = null;
-    gameState.trumpSelectionDeadline = Date.now() + BIDDING_TIME_MS;
+    gameState.trumpSelectionDeadline = Date.now() + TRUMP_SELECTION_TIME_MS;
 }
 
 function handlePlaceBid(playerId, amount) {
@@ -381,6 +411,67 @@ function resetBiddingTimer() {
     gameState.biddingDeadline = Date.now() + BIDDING_TIME_MS;
 }
 
+let cpuBidInterval, bidTimeoutInterval, turnTimeoutInterval, trumpTimeoutInterval;
+
+function startGameLoops() {
+    stopGameLoops();
+    const hasCPU = gameState?.players?.some(p => p.isCPU);
+    if (hasCPU) {
+        cpuBidInterval = setInterval(runCpuBidding, 1000);
+    }
+    bidTimeoutInterval = setInterval(checkBiddingTimeout, 1000);
+    turnTimeoutInterval = setInterval(checkTurnTimeout, 1000);
+    trumpTimeoutInterval = setInterval(checkTrumpSelectionTimeout, 1000);
+}
+
+function stopGameLoops() {
+    clearInterval(cpuBidInterval);
+    clearInterval(bidTimeoutInterval);
+    clearInterval(turnTimeoutInterval);
+    clearInterval(trumpTimeoutInterval);
+}
+
+startGameLoops();
+
+
+let cpuBidPlans = {};
+let cpuTrumpPlan = null;
+let cpuMovePlan = null;
+
+function runCpuBidding() {
+    if (!isHost || gameState.isPaused || gameState.phase !== 'BIDDING') return;
+    let changed = false;
+    let plannedThisTick = false;
+
+    gameState.players.forEach(player => {
+        if (!player.isCPU || player.hasFolded) return;
+        if (gameState.highestBid.playerId === player.id) return;
+
+        let plan = cpuBidPlans[player.id];
+        if (!plan) {
+            if (plannedThisTick) return;
+            plannedThisTick = true;
+            plan = { maxBid: getCpuMaxBid(player.hand, gameState.players.length), nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
+            cpuBidPlans[player.id] = plan;
+        }
+        if (Date.now() < plan.nextActionAt) return;
+
+        const nextAmount = gameState.highestBid.amount === 0 ? MIN_BID : gameState.highestBid.amount + 5;
+        if (nextAmount <= plan.maxBid && nextAmount <= MAX_BID) {
+            handlePlaceBid(player.id, nextAmount);
+        } else if (gameState.highestBid.playerId === null &&
+                   gameState.players.filter(p => !p.hasFolded).length === 1) {
+            handlePlaceBid(player.id, MIN_BID);
+        } else {
+            handleFold(player.id);
+        }
+        plan.nextActionAt = Date.now() + 1200 + Math.random() * 2200;
+        changed = true;
+    });
+
+    if (changed) broadcastState();
+}
+
 function checkBiddingTimeout() {
     if (!isHost) return;
     if (gameState.isPaused) return;
@@ -403,8 +494,6 @@ function checkBiddingTimeout() {
     broadcastState();
 }
 
-setInterval(checkBiddingTimeout, 1000);
-
 function resetTurnTimer() {
     gameState.turnDeadline = Date.now() + TURN_TIME_MS;
 }
@@ -417,11 +506,39 @@ function checkTurnTimeout() {
     const player = gameState.players[gameState.turnIndex];
     if (!player) { gameState.turnDeadline = null; return; }
 
+    if (player.isCPU) {
+        if (!cpuMovePlan || cpuMovePlan.playerId !== player.id) {
+            cpuMovePlan = { playerId: player.id, actAt: Date.now() + 700 + Math.random() * 1300 };
+        }
+        if (Date.now() < cpuMovePlan.actAt) return;
+        const card = getBestCardToPlay(player.id, gameState);
+        cpuMovePlan = null;
+        if (card) handlePlayCard(player.id, card);
+        else gameState.turnDeadline = null;
+        broadcastState();
+        return;
+    }
+    cpuMovePlan = null;
+
     const isPlayerDisconnected = isDisconnected(player.id);
 
-    if ((isPlayerDisconnected && hasGraceExpired(player.id)) || Date.now() >= gameState.turnDeadline) {
-        const legalCards = player.hand.filter(c => isCardPlayable(player.id, c));
-        const cardToPlay = legalCards.length > 0 ? legalCards[Math.floor(Math.random() * legalCards.length)] : null;
+    if (Date.now() >= gameState.turnDeadline) {
+        const playableCards = player.hand.filter(c => isCardPlayable(player.id, c));
+        const cardToPlay = playableCards.length > 0 
+            ? playableCards[Math.floor(Math.random() * playableCards.length)] 
+            : null;
+
+        if (cardToPlay) {
+            handlePlayCard(player.id, cardToPlay);
+        } else {
+            gameState.turnDeadline = null;
+        }
+        broadcastState();
+        return;
+    }
+
+    if ((isPlayerDisconnected && hasGraceExpired(player.id))) {
+        const cardToPlay = getBestCardToPlay(player.id, gameState);
 
         if (cardToPlay) {
             handlePlayCard(player.id, cardToPlay);
@@ -432,7 +549,6 @@ function checkTurnTimeout() {
     }
 }
 
-setInterval(checkTurnTimeout, 1000);
 
 function autoResolveTrumpSelection() {
     gameState.trumpSelectionDeadline = null;
@@ -459,6 +575,21 @@ function checkTrumpSelectionTimeout() {
     if (gameState.phase !== 'TRUMP_SELECTION') return;
 
     const bidderId = gameState.highestBid.playerId;
+    const bidder = gameState.players.find(p => p.id === bidderId);
+
+    if (bidder && bidder.isCPU) {
+        if (!cpuTrumpPlan || cpuTrumpPlan.playerId !== bidderId) {
+            cpuTrumpPlan = { playerId: bidderId, actAt: Date.now() + 1000 + Math.random() * 1500 };
+        }
+        if (Date.now() >= cpuTrumpPlan.actAt) {
+            const choice = getCpuTrumpChoice(bidder, gameState.players.length);
+            cpuTrumpPlan = null;
+            handleSetTrump(bidderId, choice.suit, choice.calls);
+            broadcastState();
+        }
+        return;
+    }
+
     const bidderDisconnected = bidderId && isDisconnected(bidderId) && hasGraceExpired(bidderId);
     const timedOut = gameState.trumpSelectionDeadline && Date.now() >= gameState.trumpSelectionDeadline;
 
@@ -467,8 +598,6 @@ function checkTrumpSelectionTimeout() {
         broadcastState();
     }
 }
-
-setInterval(checkTrumpSelectionTimeout, 1000);
 
 function togglePause() {
     if (!isHost) return;

@@ -37,7 +37,7 @@
 html, body {
     margin: 0;
     padding: 0;
-    height: 100%;
+    height: 100dvh;
 }
 
 body {
@@ -45,7 +45,7 @@ body {
     color: var(--ivory);
     background: var(--felt-glow);
     background-color: var(--felt-800);
-    min-height: 100vh;
+    min-height: 100dvh;
     overflow: hidden;
     display: flex;
     justify-content: center;
@@ -132,7 +132,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 #view-landing {
     justify-content: center;
-    min-height: 100vh;
+    min-height: 100dvh;
     padding: 24px;
     text-align: center;
 }
@@ -150,6 +150,36 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     margin: 6px 0 28px;
     letter-spacing: 0.5em;
     padding-left: 0.5em;
+}
+
+.game-logo {
+    position: relative;
+    width: 104px;
+    height: 104px;
+    margin: 0 auto 6px;
+}
+.logo-badge {
+    width: 100%;
+    height: 100%;
+    filter: drop-shadow(0 6px 16px rgba(0,0,0,0.55));
+}
+.logo-digit {
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, var(--walnut-700), var(--walnut-900));
+    border: 2px solid var(--brass-300);
+    color: var(--brass-300);
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 17px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.5);
 }
 
 .landing-card {
@@ -192,7 +222,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
 #view-lobby {
     width: 92%;
-    max-width: 600px;
+    max-width: 650px;
     margin: 6vh auto;
     background: linear-gradient(180deg, var(--walnut-700), var(--walnut-900));
     border: 1px solid var(--brass-700);
@@ -200,6 +230,10 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     border-radius: 16px;
     text-align: center;
     box-shadow: var(--shadow-deep);
+
+    max-height: 88dvh;
+    display: flex;
+    flex-direction: column;
 }
 
 #view-lobby h2 { color: var(--brass-300); margin-bottom: 20px; }
@@ -222,6 +256,10 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     flex-direction: column;
     gap: 8px;
     text-align: left;
+
+    overflow-y: auto;
+    padding-right: 4px;
+    flex: 1 1 auto;
 }
 
 .lobby-player-row {
@@ -288,6 +326,16 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     border: 1px solid var(--danger);
     border-radius: 999px;
 }
+.cpu-tag {
+    color: var(--brass-300);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border: 1px solid var(--brass-500);
+    border-radius: 999px;
+    white-space: nowrap;
+}
 .lobby-summary {
     margin-top: 14px;
     font-size: 13px;
@@ -313,11 +361,21 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     border: 1px solid var(--brass-700);
     box-shadow: var(--shadow-soft);
 }
+.lobby-utility-row select {
+    flex: 0 0 auto;
+    margin: 0;
+    font-size: 13px;
+    padding: 0 8px;
+    background: rgba(255,255,255,0.06);
+    color: var(--ivory);
+    border: 1px solid var(--brass-700);
+    border-radius: 8px;
+}
 
 #view-game {
     width: 100%;
     max-width: 1800px;
-    height: 100vh;
+    height: 100dvh;
     flex-direction: column;
     margin: 0 auto;
     position: relative;
@@ -830,6 +888,26 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     height: 72px;
     border-radius: 6px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.55);
+    animation: none;
+}
+
+@keyframes kaali-tirri-spin-in {
+    0%   { opacity: 0; scale: 0.3; rotate: 520deg; }
+    65%  { opacity: 1; }
+    100% { opacity: 1; scale: 1; rotate: 0deg; }
+}
+@keyframes kaali-tirri-glow {
+    0%, 100% { box-shadow: 0 4px 14px rgba(0,0,0,0.55), 0 0 0 2px var(--brass-300), 0 0 14px 3px rgba(236,208,138,0.55); }
+    50%      { box-shadow: 0 4px 14px rgba(0,0,0,0.55), 0 0 0 2px var(--brass-300), 0 0 28px 9px rgba(236,208,138,0.95); }
+}
+.played-card.is-kaali-tirri {
+    animation: kaali-tirri-spin-in 0.5s cubic-bezier(.22,.85,.25,1),
+               kaali-tirri-glow 1.3s ease-in-out 0.5s infinite;
+    z-index: 8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .played-card.is-kaali-tirri { animation: none; box-shadow: 0 4px 14px rgba(0,0,0,0.55), 0 0 0 2px var(--brass-300); }
 }
 
 .mini-card {
@@ -941,7 +1019,102 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     min-height: 100px;
 }
 
+#howToPlayBtn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 3100;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, var(--brass-300), var(--brass-500));
+    color: var(--ink);
+    border: 1px solid var(--brass-700);
+    font-size: 18px;
+    font-weight: 800;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    box-shadow: var(--shadow-soft);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: transform 0.15s ease;
+}
+#howToPlayBtn:hover { transform: scale(1.08); }
+
+.page-modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(5,10,8,0.75);
+    z-index: 3100;
+}
+.page-modal {
+    display: none;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: linear-gradient(180deg, var(--walnut-700), var(--walnut-900));
+    color: var(--ivory);
+    border: 1px solid var(--brass-500);
+    border-radius: 16px;
+    width: 92%;
+    max-width: 640px;
+    max-height: 84vh;
+    overflow-y: auto;
+    z-index: 3101;
+    box-shadow: var(--shadow-deep);
+}
+.page-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 18px 22px;
+    border-bottom: 1px solid rgba(255,255,255,0.15);
+    position: sticky;
+    top: 0;
+    background: var(--walnut-700);
+    border-radius: 16px 16px 0 0;
+}
+.page-modal-header h3 {
+    margin: 0;
+    font-family: var(--font-display);
+    color: var(--brass-300);
+    font-size: 20px;
+}
+.page-modal-body {
+    padding: 6px 22px 22px;
+    overflow-y: auto;
+}
+.page-modal-body h4 {
+    color: var(--brass-300);
+    font-size: 15px;
+    margin: 16px 0 6px;
+    font-family: var(--font-display);
+}
+.page-modal-body p {
+    margin: 0 0 4px;
+    line-height: 1.55;
+    font-size: 14px;
+    color: var(--ivory-dim);
+}
+.page-modal-body p b { color: var(--ivory); }
+.page-modal-body hr {
+    border: none;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    margin: 14px 0;
+}
+
 @media (max-width: 860px) {
+    #howToPlayBtn { top: 10px; right: 10px; width: 36px; height: 36px; font-size: 15px; }
+    .page-modal { width: 94%; max-height: 88vh; }
+    .page-modal-header { padding: 14px 16px; }
+    .page-modal-header h3 { font-size: 17px; }
+    .page-modal-body { padding: 4px 16px 16px; }
+    .page-modal-body p { font-size: 13px; }
+
     .card { width: 46px; height: 66px; font-size: 13px; border-radius: 6px; gap: 1px; }
     .card-suit { font-size: 15px; }
     .mini-card { width: 18px !important; height: 27px !important; }

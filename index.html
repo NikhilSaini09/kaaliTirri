@@ -9,10 +9,29 @@
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link rel="icon" type="image/webp" href="Assets/3OfSpade.webp">
+    <link rel="icon" type="image/svg+xml" href="Assets/3OfSpade.svg">
 </head>
 <body>
+    <button id="howToPlayBtn" aria-label="How to play" title="How to play">❓</button>
+
     <!-- VIEW 1: Landing Page -->
     <div id="view-landing" class="view-container">
+        <div class="game-logo" aria-hidden="true">
+            <svg viewBox="0 0 120 120" class="logo-badge">
+                <defs>
+                    <linearGradient id="logoGold" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#f3dfa0"/>
+                        <stop offset="100%" stop-color="#c9a24d"/>
+                    </linearGradient>
+                </defs>
+                <circle cx="60" cy="60" r="55" fill="rgba(0,0,0,0.25)"/>
+                <circle cx="60" cy="60" r="55" fill="none" stroke="url(#logoGold)" stroke-width="2.5"/>
+                <path fill="url(#logoGold)" d="M60,26 C38,50 28,64 28,75 C28,86 38,94 49,90 C53,88 57,85 60,80 C63,85 67,88 71,90 C82,94 92,86 92,75 C92,64 82,50 60,26 Z"/>
+                <path fill="url(#logoGold)" d="M53,80 L67,80 L72,102 L48,102 Z"/>
+            </svg>
+            <span class="logo-digit">3</span>
+        </div>
         <h1 class="brand">Kaali Tirri</h1>
         <div class="brand-suit-row">♠ ♥ ♦ ♣</div>
         <div class="landing-card">
@@ -35,6 +54,7 @@
         <button id="startGameBtn" class="btn-success" style="display: none;">Start Game</button>
 
         <div class="lobby-utility-row">
+            <button id="addCpuBtn" class="btn-wood" style="display:none;">Add Bot</button>
             <button id="saveBtn" class="btn-wood">Save Game</button>
             <label for="loadInput" class="btn-wood">Load Save</label>
             <input type="file" id="loadInput" accept=".json" style="display: none;">
@@ -92,7 +112,7 @@
                 <h3>Choose Trump &amp; Team</h3>
                 <div class="panel-label">Trump suit</div>
                 <select id="trumpSuitSelect">
-                    <option value="♠">♠ Spades</option><option value="♥">♥ Hearts</option><option value="♦">♦ Diamonds</option><option value="♣">♣ Clubs</option>
+                    <option value="♠">♠ Spades</option><option value="♥">♥ Hearts</option><option value="♣">♣ Clubs</option><option value="♦">♦ Diamonds</option>
                 </select>
                 <div class="panel-label">Partner card(s)</div>
                 <div id="team-cards-container"></div>
@@ -146,8 +166,48 @@
         </div>
     </div>
 
+    <div id="how-to-play-backdrop" class="page-modal-backdrop" style="display: none;"></div>
+    <div id="how-to-play-modal" class="page-modal" style="display: none;">
+        <div class="page-modal-header">
+            <h3>How to Play Kaali Tirri</h3>
+            <button id="closeHowToPlayBtn" class="btn-danger">✕ Close</button>
+        </div>
+        <div class="page-modal-body">
+            <h4>The Deck &amp; Scoring</h4>
+            <p>A standard 52-card deck, dealt evenly to every seated player (any leftover cards are set aside unused). Rank, low to high: 2 3 4 5 6 7 8 9 10 J Q K A.</p>
+            <p>Card points: <b>A, K, Q, J, 10</b> = 10 pts each &middot; <b>5</b> = 5 pts &middot; <b>3♠ ("Kaali Tirri")</b> = 30 pts &middot; everything else = 0 pts. Maximum possible in play: 250 pts.</p>
+            <hr>
+            <h4>Bidding</h4>
+            <p>After the deal, bidding opens: raise in multiples of 5 between <b>130</b> and <b>250</b>, or fold. Whoever bids highest (or hits 250 first) becomes the <b>Bid Winner</b> and sets the terms for the hand.</p>
+            <p>Bidding has a 30-second clock once the first bid lands - if nobody bids in time, a random player is handed the win at 130 pts. If the clock runs out mid-bidding, everyone who hasn't matched the current high bid is folded automatically.</p>
+            <hr>
+            <h4>Trump &amp; Secret Teams</h4>
+            <p>The Bid Winner picks a <b>trump suit</b> and calls one or more <b>partner cards</b> by rank and suit (the number allowed scales with player count). Whoever holds a called card is secretly on the Bidder's team - including possibly the Bid Winner's own hand.</p>
+            <p>Nobody finds out who's on which team until a called card is actually played to the table. Anyone not on the Bidder's team by the end is a <b>Defender</b>.</p>
+            <hr>
+            <h4>Playing a Trick</h4>
+            <p>The Bid Winner leads the first trick; whoever wins a trick leads the next. Follow the led suit if you're able to. If you can't, play anything - trump or otherwise. Highest card of the led suit wins the trick, unless someone plays trump, in which case the highest trump wins instead.</p>
+            <p>Each trick's points go to whoever wins it, and the cards move into that player's <b>Won Pile</b> - click any won pile to see exactly what's in it.</p>
+            <p>You get 30 seconds per turn. Run out the clock and the game auto-plays a legal card on your behalf, so nobody can stall the table.</p>
+            <hr>
+            <h4>Winning the Round</h4>
+            <p>Once every card has been played, team totals are added up. If the Bidder's team meets or beats the bid amount, they win the round; otherwise the Defenders take it.</p>
+            <hr>
+            <h4>CPU Players</h4>
+            <p>Short a few people? The host can add CPU-controlled seats from the waiting room. CPUs bid based on their own hand strength, choose trump and partner cards sensibly when they win the bid, and play every card using a fairness-respecting strategy that only ever looks at their own hand and what's already been publicly played - never at anyone else's cards.</p>
+            <p>That same logic is what steps in for a human player automatically if they let their turn clock run out.</p>
+            <hr>
+            <h4>Reconnecting</h4>
+            <p>Lost your connection or closed the tab mid-hand? Rejoin with the same name (or access code, if the host set one up) and you'll seamlessly reclaim your seat, cards and all. A short grace period protects a disconnected seat before the game auto-plays for it.</p>
+            <hr>
+            <h4>Host Tools</h4>
+            <p>The host's gear menu can pause the whole table, re-deal, save the game to a file and reload it later, and hand host duties to another player. In the waiting room, the host can tick/untick who's actually seated for the next hand (everyone else spectates) and reorder the turn cycle.</p>
+        </div>
+    </div>
+
     <script src="network.js"></script>
     <script src="game.js"></script>
+    <script src="smartAiPlayer.js"></script>
     <script src="ui.js"></script>
 </body>
 </html>

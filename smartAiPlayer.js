@@ -5,17 +5,129 @@
 // endgame lookahead, the bidding estimate), it does so by SAMPLING plausible hands from the
 // unseen-card pool - never by peeking at what's actually in anyone's hand.
 
-function reconstructTrickHistory(state) {
-    const numPlayers = state.players.length;
-    if (!numPlayers) return [];
-    const tricks = [];
-    state.players.forEach(p => {
-        const won = p.wonCards || [];
-        for (let i = 0; i + numPlayers <= won.length; i += numPlayers) {
-            tricks.push(won.slice(i, i + numPlayers));
+// ---------------------------------------------------------------------------------------
+// TRICK MEMORY
+// Completed tricks, each player's known voids and the set of played cards are remembered in
+// a WeakMap keyed by the state object.
+// ---------------------------------------------------------------------------------------
+
+const trickMemories = new WeakMap();
+
+function cardCode(c) { return `${c.value}${c.suit}`; }
+
+function newTrickMemory() {
+    return {
+        ids: [],           // player-id order this memory was built for, to detect a changed table
+        tricks: [],        // [{ cards: [...n cards in play order], ordered: bool }]
+        seenLen: {},       // playerId -> how many of their wonCards are already recorded
+        anchor: {},        // playerId -> { value, suit } of their first won card (deal-change detector)
+        voids: {},         // playerId -> Set of suits shown void in COMPLETED tricks
+        played: new Set()  // card codes of every card in a completed trick
+    };
+}
+
+function resetTrickMemory(mem, state) {
+    mem.ids = state.players.map(p => p.id);
+    mem.tricks = [];
+    mem.seenLen = {};
+    mem.anchor = {};
+    mem.voids = {};
+    mem.played = new Set();
+    for (const p of state.players) { mem.voids[p.id] = new Set(); mem.seenLen[p.id] = 0; }
+}
+
+function addTrickToMemory(mem, cards, ordered) {
+    mem.tricks.push({ cards: cards.slice(), ordered });
+    const leadSuit = cards[0].suit;
+    for (let i = 0; i < cards.length; i++) {
+        const c = cards[i];
+        mem.played.add(cardCode(c));
+        if (i > 0 && c.suit !== leadSuit && c.playedBy) {
+            if (!mem.voids[c.playedBy]) mem.voids[c.playedBy] = new Set();
+            mem.voids[c.playedBy].add(leadSuit);
         }
-    });
-    return tricks;
+    }
+}
+
+function syncTrickMemory(mem, state) {
+    const players = state.players;
+    const n = players.length;
+    if (!n) return mem;
+
+    // Has the table changed underneath us (new deal, loaded save, different players)?
+    let stale = mem.ids.length !== n;
+    for (let i = 0; !stale && i < n; i++) {
+        const p = players[i];
+        if (mem.ids[i] !== p.id) { stale = true; break; }
+        const won = p.wonCards || [];
+        const seen = mem.seenLen[p.id] || 0;
+        if (seen > won.length) { stale = true; break; }
+        if (seen > 0) {
+            const a = mem.anchor[p.id];
+            if (!a || won[0].value !== a.value || won[0].suit !== a.suit) { stale = true; break; }
+        }
+    }
+    if (stale) resetTrickMemory(mem, state);
+
+    // Pick up whatever is new since the last look (usually nothing).
+    let fresh = null;
+    for (let i = 0; i < n; i++) {
+        const p = players[i];
+        const won = p.wonCards;
+        if (!won) continue;
+        let k = mem.seenLen[p.id] || 0;
+        if (k + n > won.length) continue;
+        if (k === 0) mem.anchor[p.id] = { value: won[0].value, suit: won[0].suit };
+        if (!fresh) fresh = [];
+        for (; k + n <= won.length; k += n) fresh.push(won.slice(k, k + n));
+        mem.seenLen[p.id] = k;
+    }
+    if (fresh) {
+        const ordered = fresh.length === 1;
+        for (const cards of fresh) addTrickToMemory(mem, cards, ordered);
+    }
+    return mem;
+}
+
+function getTrickMemory(state) {
+    let mem = trickMemories.get(state);
+    if (!mem) {
+        mem = newTrickMemory();
+        resetTrickMemory(mem, state);
+        trickMemories.set(state, mem);
+    }
+    return syncTrickMemory(mem, state);
+}
+
+/**
+ * Hook for game.js: call from evaluateTrick() BEFORE the trick is pushed onto the winner's
+ * wonCards. Catches the memory up first, then records this trick in exact order.
+ */
+function cpuObserveTrick(state, trickCards, winnerId) {
+    if (!trickCards || trickCards.length === 0) return;
+    const mem = getTrickMemory(state);
+    addTrickToMemory(mem, trickCards, true);
+    if (!(mem.seenLen[winnerId] > 0)) mem.anchor[winnerId] = { value: trickCards[0].value, suit: trickCards[0].suit };
+    mem.seenLen[winnerId] = (mem.seenLen[winnerId] || 0) + trickCards.length;
+}
+
+// Copy of a state's memory for a synthetic (endgame) state that starts from the same history.
+function seedTrickMemory(simState, realState) {
+    const src = getTrickMemory(realState);
+    const copy = newTrickMemory();
+    copy.ids = src.ids.slice();
+    copy.tricks = src.tricks.slice();
+    copy.seenLen = { ...src.seenLen };
+    copy.anchor = { ...src.anchor };
+    copy.voids = {};
+    Object.keys(src.voids).forEach(id => { copy.voids[id] = new Set(src.voids[id]); });
+    copy.played = new Set(src.played);
+    trickMemories.set(simState, copy);
+}
+
+// Kept for callers that want the plain list of completed tricks, in memory order.
+function reconstructTrickHistory(state) {
+    return getTrickMemory(state).tricks.map(t => t.cards);
 }
 
 function resolveTrickWinnerCard(trick, trumpSuit) {
@@ -36,24 +148,23 @@ function resolveTrickWinnerCard(trick, trumpSuit) {
 }
 
 function computeVoidMap(state) {
+    const mem = getTrickMemory(state);
     const voidMap = {};
-    state.players.forEach(p => { voidMap[p.id] = new Set(); });
+    state.players.forEach(p => { voidMap[p.id] = new Set(mem.voids[p.id] || []); });
 
-    const markTrick = (trick) => {
-        if (!trick || trick.length === 0) return;
-        const leadSuit = trick[0].suit;
-        for (let i = 1; i < trick.length; i++) {
-            const c = trick[i];
-            if (c.suit !== leadSuit && c.playedBy && voidMap[c.playedBy]) {
-                voidMap[c.playedBy].add(leadSuit);
-            }
+    const board = state.board;
+    if (board && board.length > 0) {
+        const leadSuit = board[0].suit;
+        for (let i = 1; i < board.length; i++) {
+            const c = board[i];
+            if (c.suit !== leadSuit && c.playedBy && voidMap[c.playedBy]) voidMap[c.playedBy].add(leadSuit);
         }
-    };
-
-    reconstructTrickHistory(state).forEach(markTrick);
-    markTrick(state.board);
+    }
     return voidMap;
 }
+
+// Weight for tricks whose position in the game is unknown (see syncTrickMemory).
+const UNORDERED_AFFINITY_FACTOR = 1.5;
 
 function computeTeamAffinity(state) {
     const affinity = {};
@@ -62,14 +173,17 @@ function computeTeamAffinity(state) {
     state.players.forEach(p => { teamOf[p.id] = p.team; });
     let affinityFactor = 2.4;
 
-    reconstructTrickHistory(state).forEach(trick => {
+    // Chronological order matters here: earlier tricks carry more weight.
+    getTrickMemory(state).tricks.forEach(entry => {
+        const trick = entry.cards;
         const leadSuit = trick[0].suit;
         const winnerCard = resolveTrickWinnerCard(trick, state.trumpSuit);
         if (!winnerCard) return;
         const winnerTeam = teamOf[winnerCard.playedBy];
         if (winnerTeam !== 'BIDDER_TEAM' && winnerTeam !== 'DEFENDER_TEAM') return;
-        const sign = winnerTeam === 'BIDDER_TEAM' ? affinityFactor : -affinityFactor;
-        affinityFactor -= 0.15;
+        const weight = entry.ordered ? affinityFactor : UNORDERED_AFFINITY_FACTOR;
+        const sign = winnerTeam === 'BIDDER_TEAM' ? weight : -weight;
+        if (entry.ordered) affinityFactor -= 0.15;
 
         trick.forEach(c => {
             if (c === winnerCard) return;
@@ -113,10 +227,7 @@ function determineMyTeam(playerId, state) {
 // ---------------------------------------------------------------------------------------
 // KAALI TIRRI (3♠, 30 pts) GATE
 // The 3♠ is worth 30 points, so it is only ever played voluntarily when our team is very
-// likely to take the trick it lands in (or it's forced). estimateTeamTrickProb() is a cheap
-// analytic estimate built ONLY from our own hand + public information (cards already played,
-// the evicted set, void map, opponents' hand SIZES, revealed/guessed teams). It is cheap
-// enough to also run inside the bidding / endgame rollouts.
+// likely to take the trick it lands in (or it's forced).
 // ---------------------------------------------------------------------------------------
 
 const KAALI_FEED_PROB = 0.92; // near-certain our team takes the trick -> actively cash the 30
@@ -259,6 +370,7 @@ function gateKaaliCandidates(playerId, state, legal) {
 function getBestCardToPlay(playerId, state) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
+    getTrickMemory(state);
 
     if (player.hand.length <= ENDGAME_SEARCH_MAX_HAND && state.board.length < state.players.length) {
         try {
@@ -279,6 +391,7 @@ function getBestCardToPlay(playerId, state) {
 function getBestCardToPlayInner(playerId, state) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
+    getTrickMemory(state);
 
     const legal = getLegalCards(player, state);
     if (legal.length === 1) return legal[0];
@@ -314,20 +427,17 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
 
     const voidMap = computeVoidMap(state);
 
-    // 2. REBUILD MEMORY (Card Counting)
-    const playedCards = [];
-    state.players.forEach(p => {
-        if (p.wonCards) playedCards.push(...p.wonCards);
-    });
-    playedCards.push(...state.board);
+    // 2. CARD COUNTING
+    const playedCodes = getTrickMemory(state).played;
+    const boardCodes = new Set(state.board.map(cardCode));
 
     const evictedCodes = getEvictedCardSet(state.players.length);
     const isBoss = (card) => {
         const rankIdx = getCardRank(card);
         for (let r = rankIdx + 1; r < values.length; r++) {
             const higherVal = values[r];
-            const isPlayed = evictedCodes.has(`${higherVal}${card.suit}`) ||
-                playedCards.some(pc => pc.value === higherVal && pc.suit === card.suit);
+            const code = `${higherVal}${card.suit}`;
+            const isPlayed = evictedCodes.has(code) || playedCodes.has(code) || boardCodes.has(code);
             const inHand = player.hand.some(hc => hc.value === higherVal && hc.suit === card.suit);
             if (!isPlayed && !inHand) return false; // Someone else still holds a higher card
         }
@@ -502,6 +612,7 @@ function simPlayCard(sim, playerId, card) {
         const winnerCard = resolveTrickWinnerCard(sim.board, sim.trumpSuit);
         const winner = sim.players.find(p => p.id === winnerCard.playedBy);
         const trickPoints = sim.board.reduce((s, c) => s + getCardPoints(c), 0);
+        cpuObserveTrick(sim, sim.board, winner.id);
         winner.points += trickPoints;
         winner.wonCards.push(...sim.board);
         sim.board = [];
@@ -538,7 +649,7 @@ function runPlayout(sim) {
 function listUnseenCards(state, excludeHand, numPlayersOverride) {
     const seen = new Set();
     (excludeHand || []).forEach(c => seen.add(`${c.value}${c.suit}`));
-    state.players.forEach(p => (p.wonCards || []).forEach(c => seen.add(`${c.value}${c.suit}`)));
+    if (state.players.length > 0) getTrickMemory(state).played.forEach(code => seen.add(code));
     state.board.forEach(c => seen.add(`${c.value}${c.suit}`));
     const n = numPlayersOverride || (state.players && state.players.length) || 0;
     getEvictedCardSet(n).forEach(code => seen.add(code));
@@ -590,7 +701,7 @@ function buildDeterminizedSimState(state, myId, voidMap) {
     state.players.forEach(p => {
         if (p.id === myId) return;
         const target = simPlayers.find(sp => sp.id === p.id);
-        const need = p.hand.length; // only ever the count - never real contents
+        const need = p.hand.length;
         const voids = voidMap[p.id] || new Set();
         let taken = 0;
         for (let i = 0; i < pool.length && taken < need; i++) {
@@ -609,13 +720,15 @@ function buildDeterminizedSimState(state, myId, voidMap) {
         }
     });
 
-    return {
+    const simState = {
         players: simPlayers,
         board: state.board.map(c => ({ ...c })),
         trumpSuit: state.trumpSuit,
         calledCards: [...(state.calledCards || [])],
         turnIndex: state.turnIndex
     };
+    seedTrickMemory(simState, state);
+    return simState;
 }
 
 function teamPointsIn(sim, myId, myTeam) {
@@ -701,11 +814,6 @@ function simulateHandAsBidder(hand, numPlayers) {
     return bidderPoints;
 }
 
-/**
- * Team structure that follows directly from the game rules (no per-player-count tables):
- * the bid winner may call floor((n-2)/2) partner cards, so the bidder's side is 1 + calls
- * players out of n. Odd counts leave the defenders a player (or more) up.
- */
 function getTeamStructure(numPlayers) {
     const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));
     const calls = Math.floor((numPlayers - 2) / 2);
@@ -749,20 +857,12 @@ function getCpuMaxBid(hand, numPlayers) {
     if (dist) {
         ceiling = dist.mean - BID_RISK_LAMBDA * Math.max(dist.sd, BID_MIN_SIGMA);
     } else {
-        // Simulation unavailable: fall back to the bidder side's plain share of the points.
         ceiling = TOTAL_POINTS * getTeamStructure(numPlayers).share * 0.9;
     }
     ceiling = Math.min(MAX_BID, ceiling);
     return Math.floor(ceiling / 5) * 5;
 }
 
-/**
- * Which exact cards this deal cut from the deck (when 52 doesn't divide evenly across
- * `numPlayers`, startDeal() trims a deterministic set down to size). This is public info -
- * anyone applying the same formula from the same player count gets the same answer - so
- * using it isn't peeking at anything hidden, and it's essential: calling a partner card that
- * was cut from this deal entirely can never find a teammate.
- */
 function getEvictedCardSet(numPlayers) {
     if (!numPlayers || typeof EVICTION_ORDER === 'undefined') return new Set();
     const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));

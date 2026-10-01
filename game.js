@@ -232,6 +232,7 @@ function evaluateTrick() {
         }
     }
 
+    if (gameState.players.some(p => p.isCPU) && typeof cpuObserveTrick === 'function') cpuObserveTrick(gameState, gameState.board, winningCard.playedBy);
     const trickPoints = gameState.board.reduce((sum, c) => sum + getCardPoints(c), 0);
     const winnerIndex = gameState.players.findIndex(p => p.id === winningCard.playedBy);
     
@@ -436,8 +437,6 @@ function runCpuBidding() {
             handlePlaceBid(player.id, nextAmount);
         } else if (gameState.highestBid.playerId === null &&
                    gameState.players.filter(p => !p.hasFolded).length === 1) {
-            // Everyone else has folded and nobody has bid: a bot whose own ceiling is below the
-            // minimum still has to take the bid (rather than forcing an endless re-deal).
             handlePlaceBid(player.id, MIN_BID);
         } else {
             handleFold(player.id);

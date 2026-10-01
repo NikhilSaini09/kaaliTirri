@@ -110,18 +110,163 @@ function determineMyTeam(playerId, state) {
     return everCalled.some(code => myCodes.has(code)) ? 'BIDDER_TEAM' : 'DEFENDER_TEAM';
 }
 
+// ---------------------------------------------------------------------------------------
+// KAALI TIRRI (3♠, 30 pts) GATE
+// The 3♠ is worth 30 points, so it is only ever played voluntarily when our team is very
+// likely to take the trick it lands in (or it's forced). estimateTeamTrickProb() is a cheap
+// analytic estimate built ONLY from our own hand + public information (cards already played,
+// the evicted set, void map, opponents' hand SIZES, revealed/guessed teams). It is cheap
+// enough to also run inside the bidding / endgame rollouts.
+// ---------------------------------------------------------------------------------------
+
+const KAALI_FEED_PROB = 0.92; // near-certain our team takes the trick -> actively cash the 30
+
+function isKaali(card) {
+    return !!card && card.value === '3' && card.suit === '♠';
+}
+
+// Minimum chance our team must have of taking the trick before we may *choose* 3♠ over
+// another legal card. Relaxes as the hand shrinks, because the card has to go out eventually.
+function kaaliPlayThreshold(handSize) {
+    if (handSize >= 6) return 0.80;
+    if (handSize >= 4) return 0.70;
+    if (handSize >= 3) return 0.60;
+    return 0.50;
+}
+
+function getLegalCards(player, state) {
+    if (state.board.length > 0) {
+        const leadSuit = state.board[0].suit;
+        const follow = player.hand.filter(c => c.suit === leadSuit);
+        if (follow.length > 0) return follow;
+    }
+    return [...player.hand];
+}
+
+// P(at least one of K "marked" cards is among h cards drawn from a pool of U).
+function probHoldsAny(h, U, K) {
+    if (K <= 0 || h <= 0 || U <= 0) return 0;
+    if (K >= U || U - K < h) return 1;
+    let pNone = 1;
+    for (let i = 0; i < h; i++) pNone *= (U - K - i) / (U - i);
+    return 1 - pNone;
+}
+
+// Chance a given other player is on the OTHER team from `myTeam`.
+function makeEnemyProbFn(playerId, state, myTeam) {
+    const me = state.players.find(p => p.id === playerId);
+    const affinity = computeTeamAffinity(state);
+    const myCodes = new Set(me.hand.map(c => `${c.value}${c.suit}`));
+    const unknownOthers = state.players.filter(p => p.id !== playerId && p.team === 'UNKNOWN').length;
+    const calledLeft = (state.calledCards || []).filter(code => !myCodes.has(code));
+    const hiddenPartners = Math.min(calledLeft.length, unknownOthers);
+
+    let prior = 0.5;
+    if (unknownOthers > 0) {
+        prior = myTeam === 'BIDDER_TEAM'
+            ? 1 - hiddenPartners / unknownOthers
+            : hiddenPartners / unknownOthers;
+    }
+    prior = Math.max(0.03, Math.min(0.97, prior));
+
+    return (r) => {
+        if (r.team !== 'UNKNOWN') return r.team === myTeam ? 0 : 1;
+        const g = guessTeam(r.id, state, affinity);
+        if (g !== 'UNKNOWN') return g === myTeam ? 0.15 : 0.85;
+        return prior;
+    };
+}
+
+/**
+ * Probability that OUR TEAM ends up taking the current trick if `playerId` plays `card` now.
+ * Assumes opponents beat the trick whenever they're able to (deliberately pessimistic).
+ */
+function estimateTeamTrickProb(playerId, state, card) {
+    const n = state.players.length;
+    const meIdx = state.players.findIndex(p => p.id === playerId);
+    if (meIdx === -1 || !state.trumpSuit) return 0;
+    const me = state.players[meIdx];
+    const trump = state.trumpSuit;
+    const myTeam = determineMyTeam(playerId, state);
+
+    const board = [...state.board, { value: card.value, suit: card.suit, playedBy: playerId }];
+    const leadSuit = board[0].suit;
+    const winnerCard = resolveTrickWinnerCard(board, trump);
+    const wRank = getCardRank(winnerCard);
+
+    const remaining = [];
+    for (let k = 1; board.length + remaining.length < n; k++) {
+        remaining.push(state.players[(meIdx + k) % n]);
+    }
+
+    const unseen = listUnseenCards(state, me.hand);
+    const voidMap = computeVoidMap(state);
+    const enemyProb = makeEnemyProbFn(playerId, state, myTeam);
+
+    const pBeat = (r) => {
+        const voids = voidMap[r.id] || new Set();
+        const pool = unseen.filter(c => !voids.has(c.suit));
+        const U = pool.length;
+        const h = Math.min(r.hand.length, U);
+        if (h === 0) return 0;
+        const count = (pred) => { let t = 0; for (const c of pool) if (pred(c)) t++; return t; };
+
+        const pVoidLead = 1 - probHoldsAny(h, U, count(c => c.suit === leadSuit));
+        const higherTrump = count(c => c.suit === trump && getCardRank(c) > wRank);
+
+        if (leadSuit === trump) return probHoldsAny(h, U, higherTrump);
+        if (winnerCard.suit === trump) return pVoidLead * probHoldsAny(h, U, higherTrump);
+
+        const pHigher = probHoldsAny(h, U, count(c => c.suit === leadSuit && getCardRank(c) > wRank));
+        const pRuff = pVoidLead * probHoldsAny(h, U, count(c => c.suit === trump));
+        return 1 - (1 - pHigher) * (1 - pRuff);
+    };
+
+    let enemiesFail = 1; // chance no remaining enemy beats the current winner
+    let matesFail = 1;   // chance no remaining teammate beats the current winner
+    remaining.forEach(r => {
+        const q = enemyProb(r);
+        const pb = pBeat(r);
+        enemiesFail *= (1 - q * pb);
+        matesFail *= (1 - (1 - q) * pb);
+    });
+
+    if (winnerCard.playedBy === playerId) return enemiesFail;
+
+    const winner = state.players.find(p => p.id === winnerCard.playedBy);
+    const pWinnerOurs = winner ? 1 - enemyProb(winner) : 0.5;
+    // If an enemy holds the trick right now we still win it when a teammate later beats them.
+    return pWinnerOurs * enemiesFail + (1 - pWinnerOurs) * (1 - matesFail) * 0.8;
+}
+
+/**
+ * Applies the 3♠ rule to a list of legal cards:
+ *  - near-certain our team takes the trick  -> [3♠] (cash the 30 points)
+ *  - decent chance (threshold relaxes late) -> leave 3♠ as an option
+ *  - otherwise                              -> 3♠ removed (unless it's the only legal card)
+ */
+function gateKaaliCandidates(playerId, state, legal) {
+    if (legal.length <= 1) return legal;
+    const kaali = legal.find(isKaali);
+    if (!kaali) return legal;
+    const me = state.players.find(p => p.id === playerId);
+    const p = estimateTeamTrickProb(playerId, state, kaali);
+    if (p >= KAALI_FEED_PROB) return [kaali];
+    if (p >= kaaliPlayThreshold(me.hand.length)) return legal;
+    return legal.filter(c => !isKaali(c));
+}
+
 function getBestCardToPlay(playerId, state) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
 
     if (player.hand.length <= ENDGAME_SEARCH_MAX_HAND && state.board.length < state.players.length) {
         try {
-            const leadSuit = state.board.length > 0 ? state.board[0].suit : null;
-            const legal = leadSuit && player.hand.some(c => c.suit === leadSuit)
-                ? player.hand.filter(c => c.suit === leadSuit)
-                : player.hand;
+            const legal = getLegalCards(player, state);
             if (legal.length > 1) {
-                const choice = getBestCardToPlayEndgame(playerId, state, legal);
+                const candidates = gateKaaliCandidates(playerId, state, legal);
+                if (candidates.length === 1) return candidates[0];
+                const choice = getBestCardToPlayEndgame(playerId, state, candidates);
                 if (choice) return choice;
             }
         } catch (e) {}
@@ -135,8 +280,22 @@ function getBestCardToPlayInner(playerId, state) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
 
+    const legal = getLegalCards(player, state);
+    if (legal.length === 1) return legal[0];
+
+    const candidates = gateKaaliCandidates(playerId, state, legal);
+    if (candidates.length === 1) return candidates[0];
+
+    const excludeKaali = legal.some(isKaali) && !candidates.some(isKaali);
+    return chooseCardHeuristic(playerId, state, excludeKaali);
+}
+
+function chooseCardHeuristic(playerId, state, excludeKaali) {
+    const player = state.players.find(p => p.id === playerId);
+    if (!player || player.hand.length === 0) return null;
+
     // 1. DEDUCE GAME CONTEXT & VALID MOVES
-    let validCards = player.hand;
+    let validCards = [...player.hand];
     let hasLead = false;
     let leadSuit = null;
 
@@ -144,6 +303,11 @@ function getBestCardToPlayInner(playerId, state) {
         leadSuit = state.board[0].suit;
         hasLead = player.hand.some(c => c.suit === leadSuit);
         if (hasLead) validCards = player.hand.filter(c => c.suit === leadSuit);
+    }
+
+    if (excludeKaali) {
+        const rest = validCards.filter(c => !isKaali(c));
+        if (rest.length > 0) validCards = rest;
     }
 
     if (validCards.length === 1) return validCards[0];
@@ -157,11 +321,13 @@ function getBestCardToPlayInner(playerId, state) {
     });
     playedCards.push(...state.board);
 
+    const evictedCodes = getEvictedCardSet(state.players.length);
     const isBoss = (card) => {
         const rankIdx = getCardRank(card);
         for (let r = rankIdx + 1; r < values.length; r++) {
             const higherVal = values[r];
-            const isPlayed = playedCards.some(pc => pc.value === higherVal && pc.suit === card.suit);
+            const isPlayed = evictedCodes.has(`${higherVal}${card.suit}`) ||
+                playedCards.some(pc => pc.value === higherVal && pc.suit === card.suit);
             const inHand = player.hand.some(hc => hc.value === higherVal && hc.suit === card.suit);
             if (!isPlayed && !inHand) return false; // Someone else still holds a higher card
         }
@@ -363,16 +529,28 @@ function runPlayout(sim) {
     return sim;
 }
 
-function unseenCardPool(state, excludeHand) {
+/**
+ * Every card that could still be in another player's hand: not in `excludeHand` (our own),
+ * not already played, and - importantly - not one of the cards this deal evicted from the
+ * deck (they're public knowledge and never in anyone's hand). `numPlayersOverride` is for
+ * synthetic states that don't carry a full player list yet (the bidding simulation).
+ */
+function listUnseenCards(state, excludeHand, numPlayersOverride) {
     const seen = new Set();
     (excludeHand || []).forEach(c => seen.add(`${c.value}${c.suit}`));
     state.players.forEach(p => (p.wonCards || []).forEach(c => seen.add(`${c.value}${c.suit}`)));
     state.board.forEach(c => seen.add(`${c.value}${c.suit}`));
+    const n = numPlayersOverride || (state.players && state.players.length) || 0;
+    getEvictedCardSet(n).forEach(code => seen.add(code));
     const pool = [];
     suits.forEach(s => values.forEach(v => {
-        const code = `${v}${s}`;
-        if (!seen.has(code)) pool.push({ value: v, suit: s });
+        if (!seen.has(`${v}${s}`)) pool.push({ value: v, suit: s });
     }));
+    return pool;
+}
+
+function unseenCardPool(state, excludeHand, numPlayersOverride) {
+    const pool = listUnseenCards(state, excludeHand, numPlayersOverride);
     for (let i = pool.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [pool[i], pool[j]] = [pool[j], pool[i]];
@@ -481,13 +659,16 @@ function getBestCardToPlayEndgame(playerId, state, legalCards) {
 //    convert well in practice (e.g. all bunched in one suit that gets trumped early).
 // ---------------------------------------------------------------------------------------
 
-const BID_SIM_SAMPLES = 6;
+const BID_SIM_SAMPLES = 40;      // playouts per bid decision (~2ms each)
+const BID_RISK_LAMBDA = 0.75;   // std-devs below the expected score we bid (tuned via self-play sweep)
+const BID_MIN_SIGMA = 8;        // floor on the spread so a near-deterministic sim (2p) still gets a margin
+const TOTAL_POINTS = 250;
 
 function simulateHandAsBidder(hand, numPlayers) {
     const cardsPerPlayer = Math.min(13, Math.floor(52 / numPlayers));
     if (hand.length > cardsPerPlayer) return null; // inconsistent guess at numPlayers - skip this sample
 
-    const pool = unseenCardPool({ players: [], board: [] }, hand);
+    const pool = unseenCardPool({ players: [], board: [] }, hand, numPlayers);
     const myId = 'sim_me';
     const simPlayers = [{ id: myId, hand: hand.map(c => ({ ...c })), wonCards: [], team: 'UNKNOWN', points: 0 }];
 
@@ -521,63 +702,58 @@ function simulateHandAsBidder(hand, numPlayers) {
 }
 
 /**
- * Raw hand-strength score - kept as a fast prior/sanity-check alongside the simulated
- * estimate below, so a small or unlucky batch of samples can't send the bid somewhere wild.
- * Never peeks at anyone else's cards or the eventual trump suit, since neither is knowable
- * yet at bidding time.
+ * Team structure that follows directly from the game rules (no per-player-count tables):
+ * the bid winner may call floor((n-2)/2) partner cards, so the bidder's side is 1 + calls
+ * players out of n. Odd counts leave the defenders a player (or more) up.
  */
-function evaluateCpuHandStrength(hand) {
-    let score = 0;
-    const bySuit = {};
-    hand.forEach(c => {
-        bySuit[c.suit] = (bySuit[c.suit] || 0) + 1;
-        if (c.value === 'A') score += 14;
-        else if (c.value === 'K') score += 10;
-        else if (c.value === 'Q') score += 7;
-        else if (c.value === 'J') score += 4;
-        else if (c.value === '10') score += 2;
-        if (c.value === '5') score += 3;
-        if (c.suit === '♠' && c.value === '3') score += 22; // holding Kaali Tirri itself is huge
-    });
-    // A long suit is a strong trump candidate - reward whichever suit runs deepest.
-    const longest = Object.keys(bySuit).length ? Math.max(...Object.values(bySuit)) : 0;
-    score += Math.max(0, longest - 3) * 6;
-    return score;
+function getTeamStructure(numPlayers) {
+    const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));
+    const calls = Math.floor((numPlayers - 2) / 2);
+    const teamSize = 1 + calls;
+    return { cardsPerPlayer, calls, teamSize, share: teamSize / numPlayers };
 }
 
 /**
- * The highest amount this CPU is willing to bid this hand. Runs a few full simulated
- * playouts (this hand as bidder, against randomly-dealt opponents, played out with the same
- * heuristic every seat uses) and blends that realistic estimate with the fast static prior,
- * then shades the result down a bit - bidding right up to your own best-case estimate leaves
- * no margin for a single misplay or an unlucky trump split.
+ * Plays this hand out `samples` times as the bidder against randomly dealt (evicted-aware)
+ * opponents and returns the distribution of bidder-team points. Everything that depends on
+ * player count - cards per hand, how many partners get called, who holds what - is baked into
+ * the simulation itself, so small / odd tables come out lower and riskier on their own.
+ * With 2 players the opponent's hand is fully determined by the public eviction list, so the
+ * spread collapses and the estimate becomes (near) exact.
+ */
+function estimateBidDistribution(hand, numPlayers, samples) {
+    const results = [];
+    for (let s = 0; s < samples; s++) {
+        try {
+            const r = simulateHandAsBidder(hand, numPlayers);
+            if (r !== null && !isNaN(r)) results.push(r);
+        } catch (e) { /* skip a bad sample rather than let one failure sink the estimate */ }
+    }
+    if (results.length < Math.min(5, samples)) return null;
+    const mean = results.reduce((a, b) => a + b, 0) / results.length;
+    const variance = results.reduce((a, b) => a + (b - mean) * (b - mean), 0) / results.length;
+    return { mean, sd: Math.sqrt(variance), n: results.length };
+}
+
+/**
+ * The highest amount this CPU is willing to bid this hand: expected bidder-team points minus
+ * a risk margin proportional to how much the outcome swings (more players / more trump and
+ * partner luck = bigger swings = lower bids). A result below MIN_BID means "fold" - the bot
+ * doesn't think the hand is worth even the minimum bid.
  */
 function getCpuMaxBid(hand, numPlayers) {
     if (!numPlayers) numPlayers = Math.max(2, Math.round(52 / Math.max(1, hand.length)));
 
-    const staticPrior = MIN_BID + evaluateCpuHandStrength(hand) * 3.2;
-
-    let total = 0;
-    let successes = 0;
-    for (let s = 0; s < BID_SIM_SAMPLES; s++) {
-        try {
-            const result = simulateHandAsBidder(hand, numPlayers);
-            if (result !== null && !isNaN(result)) { total += result; successes++; }
-        } catch (e) { /* skip a bad sample rather than let one failure sink the estimate */ }
-    }
-
-    let raw;
-    if (successes >= 3) {
-        const simEstimate = total / successes;
-        raw = simEstimate * 0.75 + staticPrior * 0.25;
+    const dist = estimateBidDistribution(hand, numPlayers, BID_SIM_SAMPLES);
+    let ceiling;
+    if (dist) {
+        ceiling = dist.mean - BID_RISK_LAMBDA * Math.max(dist.sd, BID_MIN_SIGMA);
     } else {
-        raw = staticPrior;
+        // Simulation unavailable: fall back to the bidder side's plain share of the points.
+        ceiling = TOTAL_POINTS * getTeamStructure(numPlayers).share * 0.9;
     }
-
-    raw *= 0.92; // bid a bit under our own realistic estimate, not right up to the edge of it
-
-    const capped = Math.max(MIN_BID, Math.min(MAX_BID, raw));
-    return Math.floor(capped / 5) * 5;
+    ceiling = Math.min(MAX_BID, ceiling);
+    return Math.floor(ceiling / 5) * 5;
 }
 
 /**

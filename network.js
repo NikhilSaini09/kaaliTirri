@@ -361,6 +361,7 @@ function connectToHost(targetId, onFirstJoin) {
             hostConnection = null;
             updateRoomIdDisplay(myPeerId);
             try { oldHostConn.send({ type: 'PROMOTION_READY' }); } catch (e) {}
+            if (typeof startGameLoops === 'function') startGameLoops();
             renderState();
         }
         if (data.type === 'HOST_MIGRATED') {

@@ -6,6 +6,22 @@
 // unseen-card pool - never by peeking at what's actually in anyone's hand.
 
 // ---------------------------------------------------------------------------------------
+// AI FLAGS - every newer piece of logic can be switched off here without touching the code.
+// ---------------------------------------------------------------------------------------
+const AI_FLAGS = {
+    defenderInference: true,   // unknown seat that cannot hold any unplayed called card = certain defender
+    sampledProbs: true,        // trick-win chance from sampled, constraint-consistent hands (top-level decisions)
+    lastSeatRules: true,       // last seat: win as cheaply as possible only if worth it, feed when a teammate wins
+    matePickup: true,          // dump (don't overtake) when a teammate behind will probably take the trick
+    secureTeammateTrick: true, // take over a rich trick when the winning teammate is likely to be overtaken
+    bidAwareness: true,        // contest more when the bid is slipping, play safe when comfortable
+    seatAwareLeads: true,      // lead choice considers called cards, voids, ruff risk and suit shortness
+    smartDiscards: true,       // void discards: shed short suits, keep K/Q guards
+    endgameBidObjective: true, // endgame search maximises WINNING the bid (points only as tie-break)
+    simTrumpChoice: true       // trump + partner calls chosen by simulation (needs the bid for best results)
+};
+
+// ---------------------------------------------------------------------------------------
 // TRICK MEMORY
 // Completed tricks, each player's known voids and the set of played cards are remembered in
 // a WeakMap keyed by the state object.
@@ -234,19 +250,18 @@ function determineMyTeam(playerId, state) {
 // be its holder. So:
 //   - exactly one possible holder left        -> that player is a CERTAIN partner
 //   - an unknown player who cannot hold ANY unplayed called card -> a CERTAIN defender
-//     (assumes the bidder's own team is already marked, as it is in the simulations; switch
-//      ENABLE_DEFENDER_INFERENCE off if the live game leaves the bidder as UNKNOWN)
+//     (only applied once the bidder is marked as a bidder-team member - see isBidderAccountedFor -
+//      otherwise the bidder itself would be mistaken for a defender)
 //   - otherwise each card is split evenly over its remaining holders to give a per-player
 //     chance of being a partner, which is sharper than one flat prior for every seat.
 // Only public facts plus our own hand are read; opponents' hand SIZES, never contents.
 // ---------------------------------------------------------------------------------------
 
-const ENABLE_DEFENDER_INFERENCE = true;
-
 function inferTeamBeliefs(playerId, state, voidMapIn) {
     const beliefs = {};
     const me = state.players.find(p => p.id === playerId);
     if (!me) return beliefs;
+    const defenderOk = AI_FLAGS.defenderInference && isBidderAccountedFor(state);
 
     const mem = getTrickMemory(state);
     const voidMap = voidMapIn || computeVoidMap(state);
@@ -276,10 +291,308 @@ function inferTeamBeliefs(playerId, state, voidMapIn) {
             pNone *= (1 - 1 / h.length);
         });
         if (sole) { beliefs[p.id] = { team: 'BIDDER_TEAM', pBidder: 1 }; return; }
-        if (ENABLE_DEFENDER_INFERENCE && !canHoldAny) { beliefs[p.id] = { team: 'DEFENDER_TEAM', pBidder: 0 }; return; }
+        if (defenderOk && !canHoldAny) { beliefs[p.id] = { team: 'DEFENDER_TEAM', pBidder: 0 }; return; }
         beliefs[p.id] = { team: 'UNKNOWN', pBidder: 1 - pNone };
     });
     return beliefs;
+}
+
+// ---------------------------------------------------------------------------------------
+// DECISION CONTEXT (cached)
+// Everything a decision needs that only depends on public information plus the actor's own
+// hand: void map, affinity, team beliefs, unseen cards, bid pressure and the sampled worlds.
+// Cached per (state object, position) so one decision never recomputes it.
+// ---------------------------------------------------------------------------------------
+
+const ctxCache = new WeakMap();
+const NEUTRAL_MOOD = { label: 'normal', contestShift: 0, feedShift: 0 };
+
+function sumCardPoints(cards) {
+    let t = 0;
+    if (cards) for (const c of cards) t += getCardPoints(c);
+    return t;
+}
+
+function totalAvailablePoints(numPlayers) {
+    const ev = getEvictedCardSet(numPlayers);
+    let t = 0;
+    suits.forEach(s => values.forEach(v => {
+        if (!ev.has(`${v}${s}`)) t += getCardPoints({ value: v, suit: s });
+    }));
+    return t;
+}
+
+// The defender inference is only valid when the bidder is already marked as a bidder-team
+// member (otherwise the bidder itself would be "deduced" to be a defender).
+function isBidderAccountedFor(state) {
+    if (state.highestBid && state.highestBid.playerId) return true;
+    if (state.players.some(p => p.team === 'BIDDER_TEAM')) return true;
+    return ['bidWinnerId', 'bidderId', 'bidWinner', 'bidder', 'highestBidderId']
+        .some(k => state[k] !== undefined && state[k] !== null);
+}
+
+// The winning bid. game.js may expose it under several names; __bid is what the simulations set.
+function getBidAmount(state) {
+    if (typeof state.__bid === 'number') return state.__bid;
+    const names = ['bidAmount', 'biddingAmount', 'currentBid', 'highestBid', 'winningBid', 'bidValue', 'bid', 'BIDDING_AMOUNT'];
+    for (const k of names) if (typeof state[k] === 'number' && state[k] >= 100 && state[k] <= 250) return state[k];
+    for (const k of Object.keys(state)) {
+        if (/bid/i.test(k) && typeof state[k] === 'number' && state[k] >= 100 && state[k] <= 250) return state[k];
+    }
+    return null;
+}
+
+function getCtx(playerId, state) {
+    const me = state.players.find(p => p.id === playerId);
+    const mem = getTrickMemory(state);
+    const key = [
+        playerId, state.trumpSuit, state.board.map(cardCode).join(','), mem.played.size,
+        me ? me.hand.map(cardCode).join(',') : '', (state.calledCards || []).join(','),
+        state.players.map(p => (p.team || 'U').charAt(0) + p.hand.length).join('')
+    ].join('|');
+    const hit = ctxCache.get(state);
+    if (hit && hit.key === key) return hit;
+
+    const voidMap = computeVoidMap(state);
+    const ctx = { key, playerId, me, voidMap, myTeam: determineMyTeam(playerId, state) };
+    ctx.affinity = computeTeamAffinity(state);
+    ctx.beliefs = inferTeamBeliefs(playerId, state, voidMap);
+    ctx.unseen = listUnseenCards(state, me ? me.hand : []);
+    ctx.bidderOk = isBidderAccountedFor(state);
+    ctx.bid = getBidAmount(state);
+
+    const evicted = getEvictedCardSet(state.players.length);
+    const myCodes = new Set(me ? me.hand.map(cardCode) : []);
+    const boardCodes = new Set(state.board.map(cardCode));
+    ctx.calledLeft = (state.calledCards || []).filter(code =>
+        !myCodes.has(code) && !evicted.has(code) && !mem.played.has(code) && !boardCodes.has(code));
+    ctx.calledLeftSet = new Set(ctx.calledLeft);
+
+    let othersCards = 0;
+    state.players.forEach(p => { if (p.id !== playerId) othersCards += p.hand.length; });
+    ctx.poolOk = ctx.unseen.length === othersCards;   // sampling only makes sense when the books balance
+
+    ctx.mood = null; ctx.worlds = null; ctx.probCache = new Map();
+    ctxCache.set(state, ctx);
+    return ctx;
+}
+
+// Team of a player if it is CERTAIN (revealed or deduced), else 'UNKNOWN'.
+function certainTeamOf(ctx, state, id) {
+    if (id === ctx.playerId) return ctx.myTeam;
+    const p = state.players.find(x => x.id === id);
+    if (p && p.team !== 'UNKNOWN') return p.team;
+    const b = ctx.beliefs[id];
+    return b ? b.team : 'UNKNOWN';
+}
+
+// ---------------------------------------------------------------------------------------
+// PLAY FOR THE BID, NOT FOR POINTS
+// The round is won or lost on the bid. Compare the points our side still NEEDS with the
+// points still in play:
+//   need / remaining >= 0.7  -> the bid is slipping for us: contest and feed more readily
+//   need / remaining <= 0.3  -> comfortable: no need to take risks
+//   need <= 0 or need > remaining -> already decided: play normally
+// Points won by seats whose team is still unresolved are not counted for either side.
+// ---------------------------------------------------------------------------------------
+function getMood(ctx, state) {
+    if (ctx.mood) return ctx.mood;
+    ctx.mood = NEUTRAL_MOOD;
+    if (ctx.bid == null || !ctx.me) return ctx.mood;
+
+    const totalAvail = totalAvailablePoints(state.players.length);
+    let bPts = 0, dPts = 0, all = 0;
+    for (const p of state.players) {
+        const pts = sumCardPoints(p.wonCards);
+        all += pts;
+        const t = certainTeamOf(ctx, state, p.id);
+        if (t === 'BIDDER_TEAM') bPts += pts; else if (t === 'DEFENDER_TEAM') dPts += pts;
+    }
+    const remaining = totalAvail - all;
+    if (remaining <= 0) return ctx.mood;
+    // Bidder wins with >= bid. Defenders win when the bidder ends below it, i.e. when they
+    // collect at least (total - bid + 5) (all point totals are multiples of 5).
+    const need = ctx.myTeam === 'BIDDER_TEAM' ? ctx.bid - bPts : (totalAvail - ctx.bid + 5) - dPts;
+    if (need <= 0 || need > remaining) return ctx.mood;
+
+    const ratio = need / remaining;
+    if (ratio >= 0.7) ctx.mood = { label: 'push', contestShift: 0.10, feedShift: 0.04 };
+    else if (ratio <= 0.3) ctx.mood = { label: 'safe', contestShift: -0.05, feedShift: -0.04 };
+    return ctx.mood;
+}
+
+// ---------------------------------------------------------------------------------------
+// SAMPLED WORLDS
+// A "world" is one complete, consistent guess of everybody's hidden hand:
+//   - each unplayed called card is placed with a player who could actually hold it (not a
+//     known defender, not void in that suit), weighted by free slots
+//   - the rest of the unseen cards are dealt respecting every known void and hand size
+//   - a seat's team follows from what it holds: a called card means bidder team
+//   - worlds are weighted by how well they fit the play-history affinity (soft evidence)
+// This replaces the independence assumption of the analytic estimate: hands, teams and voids
+// are correlated, and a sampled world keeps all of that consistent.
+// ---------------------------------------------------------------------------------------
+
+const WORLD_SAMPLES = 48;
+const AFFINITY_WEIGHT = 0.35;
+
+function dealWorld(ctx, state, playerId) {
+    const others = state.players.filter(p => p.id !== playerId);
+    const pool = ctx.unseen.slice();
+    for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const used = new Array(pool.length).fill(false);
+    const hands = {}, need = {};
+    others.forEach(p => { hands[p.id] = []; need[p.id] = p.hand.length; });
+    const knownDefender = p => p.team === 'DEFENDER_TEAM' || (ctx.beliefs[p.id] && ctx.beliefs[p.id].team === 'DEFENDER_TEAM');
+
+    // 1. called cards go to players who can hold them
+    for (const code of ctx.calledLeft) {
+        const idx = pool.findIndex((c, i) => !used[i] && cardCode(c) === code);
+        if (idx < 0) continue;
+        const suit = pool[idx].suit;
+        const elig = []; let total = 0;
+        for (const p of others) {
+            const free = need[p.id] - hands[p.id].length;
+            if (free <= 0 || knownDefender(p) || ctx.voidMap[p.id].has(suit)) continue;
+            elig.push([p, free]); total += free;
+        }
+        if (!elig.length) continue;
+        let r = Math.random() * total, pick = elig[elig.length - 1][0];
+        for (const [p, f] of elig) { r -= f; if (r <= 0) { pick = p; break; } }
+        hands[pick.id].push(pool[idx]); used[idx] = true;
+    }
+
+    // 2. everything else, most constrained seats first
+    const order = others.slice().sort((a, b) =>
+        (ctx.voidMap[b.id].size - ctx.voidMap[a.id].size) || (Math.random() - 0.5));
+    for (const p of order) {
+        const voids = ctx.voidMap[p.id];
+        for (let i = 0; i < pool.length && hands[p.id].length < need[p.id]; i++) {
+            if (!used[i] && !voids.has(pool[i].suit)) { hands[p.id].push(pool[i]); used[i] = true; }
+        }
+    }
+    // 3. voids left too few legal cards (rare): complete the sample anyway
+    for (const p of order) {
+        for (let i = 0; i < pool.length && hands[p.id].length < need[p.id]; i++) {
+            if (!used[i]) { hands[p.id].push(pool[i]); used[i] = true; }
+        }
+    }
+
+    // teams + weight
+    const team = {}; let w = 1;
+    for (const p of others) {
+        if (p.team !== 'UNKNOWN') { team[p.id] = p.team; continue; }
+        const holdsCalled = hands[p.id].some(c => ctx.calledLeftSet.has(cardCode(c)));
+        team[p.id] = holdsCalled ? 'BIDDER_TEAM' : 'DEFENDER_TEAM';
+        const e = AFFINITY_WEIGHT * (ctx.affinity[p.id] || 0) * (holdsCalled ? 1 : -1);
+        w *= Math.exp(Math.max(-2.5, Math.min(2.5, e)));
+    }
+    team[playerId] = ctx.myTeam;
+    return { hands, team, w };
+}
+
+function getWorlds(ctx, state) {
+    if (!ctx.worlds) {
+        ctx.worlds = [];
+        for (let i = 0; i < WORLD_SAMPLES; i++) ctx.worlds.push(dealWorld(ctx, state, ctx.playerId));
+    }
+    return ctx.worlds;
+}
+
+// Does card c take the lead over winner card wc?
+function cardBeats(c, wc, trump) {
+    if (c.suit === wc.suit) return getCardRank(c) > getCardRank(wc);
+    return c.suit === trump && wc.suit !== trump;
+}
+
+const MATE_RESCUE_VALUE = 0.88;   // a teammate behind overtaking an enemy is likely, not certain
+
+function sampledTeamTrickProb(playerId, state, card, ctx) {
+    const n = state.players.length;
+    const meIdx = state.players.findIndex(p => p.id === playerId);
+    const trump = state.trumpSuit;
+    const board = [...state.board, { value: card.value, suit: card.suit, playedBy: playerId }];
+    const leadSuit = board[0].suit;
+    const remaining = [];
+    for (let k = 1; board.length + remaining.length < n; k++) remaining.push(state.players[(meIdx + k) % n]);
+    const baseWinner = resolveTrickWinnerCard(board, trump);
+    const myTeam = ctx.myTeam;
+
+    let sum = 0, wsum = 0;
+    for (const world of getWorlds(ctx, state)) {
+        let winner = baseWinner;
+        let winTeam = winner.playedBy === playerId ? myTeam
+            : (state.players.find(p => p.id === winner.playedBy).team !== 'UNKNOWN'
+                ? state.players.find(p => p.id === winner.playedBy).team : world.team[winner.playedBy]);
+        let rescued = false;
+        for (const r of remaining) {
+            const hand = world.hands[r.id];
+            if (!hand || hand.length === 0) continue;
+            const rTeam = r.team !== 'UNKNOWN' ? r.team : world.team[r.id];
+            const wantsWin = rTeam !== myTeam || winTeam !== myTeam;
+            if (!wantsWin) continue;
+            const follow = hand.filter(c => c.suit === leadSuit);
+            const legal = follow.length ? follow : hand;
+            let best = null;
+            for (const c of legal) {
+                if (!cardBeats(c, winner, trump)) continue;
+                if (!best || (c.suit === trump) < (best.suit === trump) ||
+                    ((c.suit === trump) === (best.suit === trump) && getCardRank(c) < getCardRank(best))) best = c;
+            }
+            if (best) {
+                winner = { value: best.value, suit: best.suit, playedBy: r.id };
+                winTeam = rTeam;
+                rescued = rTeam === myTeam;
+            }
+        }
+        const res = winTeam === myTeam ? (rescued ? MATE_RESCUE_VALUE : 1) : 0;
+        sum += world.w * res; wsum += world.w;
+    }
+    return wsum > 0 ? sum / wsum : 0;
+}
+
+// ---------------------------------------------------------------------------------------
+// POSITION-AWARE "SURE WIN"
+// True only if, whatever the seats still to act could hold, our team certainly ends up with
+// the trick after `card` is played. Differences from the old check:
+//   - certain teammates behind us are never threats; the actor itself is not a threat
+//   - it judges the card ACTUALLY being played (it may become the winner)
+//   - it knows the highest card still out in a suit (not just the Ace) from the unseen pool
+//   - a seat that must follow suit (pigeonhole on hand size) cannot ruff; known voids and
+//     exhausted trumps are used
+// ---------------------------------------------------------------------------------------
+function trickSecuredByCard(state, playerId, card, ctx) {
+    const n = state.players.length;
+    const meIdx = state.players.findIndex(p => p.id === playerId);
+    const trump = state.trumpSuit;
+    const board = [...state.board, { value: card.value, suit: card.suit, playedBy: playerId }];
+    const leadSuit = board[0].suit;
+    const winner = resolveTrickWinnerCard(board, trump);
+    if (certainTeamOf(ctx, state, winner.playedBy) !== ctx.myTeam) return false;
+    if (board.length >= n) return true;
+
+    const wRank = getCardRank(winner);
+    for (let k = 1; board.length + k - 1 < n; k++) {
+        const r = state.players[(meIdx + k) % n];
+        if (r.hand.length === 0) continue;
+        if (certainTeamOf(ctx, state, r.id) === ctx.myTeam) continue;      // a teammate can't hurt us
+
+        const voids = ctx.voidMap[r.id] || new Set();
+        const pool = ctx.unseen.filter(c => !voids.has(c.suit));
+        const h = Math.min(r.hand.length, pool.length);
+        if (h === 0) continue;
+        const nonLead = pool.filter(c => c.suit !== leadSuit).length;
+        const mustFollow = !voids.has(leadSuit) && h > nonLead;            // can't be void in the lead suit
+        const canBeVoid = !mustFollow;
+
+        const higherSame = pool.some(c => c.suit === winner.suit && getCardRank(c) > wRank);
+        if (higherSame && (winner.suit === leadSuit || canBeVoid)) return false;
+        if (winner.suit !== trump && canBeVoid && pool.some(c => c.suit === trump)) return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -324,8 +637,9 @@ function probHoldsAny(h, U, K) {
 // Chance a given other player is on the OTHER team from `myTeam`.
 function makeEnemyProbFn(playerId, state, myTeam, voidMap) {
     const me = state.players.find(p => p.id === playerId);
-    const affinity = computeTeamAffinity(state);
-    const beliefs = inferTeamBeliefs(playerId, state, voidMap);
+    const ctx = getCtx(playerId, state);
+    const affinity = ctx.affinity;
+    const beliefs = ctx.beliefs;
     const myCodes = new Set(me.hand.map(c => `${c.value}${c.suit}`));
     const unknownOthers = state.players.filter(p => p.id !== playerId && p.team === 'UNKNOWN').length;
     const calledLeft = (state.calledCards || []).filter(code => !myCodes.has(code));
@@ -354,10 +668,10 @@ function makeEnemyProbFn(playerId, state, myTeam, voidMap) {
 }
 
 /**
- * Probability that OUR TEAM ends up taking the current trick if `playerId` plays `card` now.
- * Assumes opponents beat the trick whenever they're able to (deliberately pessimistic).
+ * Analytic (independence-assumption) version. Probability that OUR TEAM ends up taking the current
+ * trick if `playerId` plays `card` now. Assumes opponents beat the trick whenever they're able to (deliberately pessimistic).
  */
-function estimateTeamTrickProb(playerId, state, card) {
+function estimateTeamTrickProbAnalytic(playerId, state, card) {
     const n = state.players.length;
     const meIdx = state.players.findIndex(p => p.id === playerId);
     if (meIdx === -1 || !state.trumpSuit) return 0;
@@ -375,8 +689,9 @@ function estimateTeamTrickProb(playerId, state, card) {
         remaining.push(state.players[(meIdx + k) % n]);
     }
 
-    const unseen = listUnseenCards(state, me.hand);
-    const voidMap = computeVoidMap(state);
+    const ctx = getCtx(playerId, state);
+    const unseen = ctx.unseen;
+    const voidMap = ctx.voidMap;
     const enemyProb = makeEnemyProbFn(playerId, state, myTeam, voidMap);
 
     const pBeat = (r) => {
@@ -413,6 +728,30 @@ function estimateTeamTrickProb(playerId, state, card) {
     const pWinnerOurs = winner ? 1 - enemyProb(winner) : 0.5;
     // If an enemy holds the trick right now we still win it when a teammate later beats them.
     return pWinnerOurs * enemiesFail + (1 - pWinnerOurs) * (1 - matesFail) * 0.8;
+}
+
+/**
+ * Probability that OUR TEAM takes the current trick if `playerId` plays `card` now.
+ * Top-level decisions use sampled, constraint-consistent worlds; inside simulations (and
+ * whenever the books don't balance) the cheaper analytic estimate is used.
+ */
+function estimateTeamTrickProb(playerId, state, card) {
+    if (!state.trumpSuit) return 0;
+    const meIdx = state.players.findIndex(p => p.id === playerId);
+    if (meIdx === -1) return 0;
+    if (AI_FLAGS.sampledProbs && !state.__sim) {
+        const ctx = getCtx(playerId, state);
+        if (ctx.bidderOk && ctx.poolOk) {
+            const code = cardCode(card);
+            let v = ctx.probCache.get(code);
+            if (v === undefined) {
+                v = sampledTeamTrickProb(playerId, state, card, ctx);
+                ctx.probCache.set(code, v);
+            }
+            return v;
+        }
+    }
+    return estimateTeamTrickProbAnalytic(playerId, state, card);
 }
 
 /**
@@ -510,30 +849,10 @@ function isPrematureAceLead(card, player, state) {
     return !player.hand.some(c => c.suit === card.suit && c.value === 'K');
 }
 
-function isTrickWinGuaranteed(state, currentWinnerCard, voidMap) {
-    if (!currentWinnerCard) return false;
-    const cardsPlayedSoFar = state.board.length + 1; 
-    if (cardsPlayedSoFar >= state.players.length) return true;
-
-    const leadSuit = state.board[0].suit;
-    const trumpSuit = state.trumpSuit;
-    const isWinnerTrump = currentWinnerCard.suit === trumpSuit;
-    const winnerRank = getCardRank(currentWinnerCard);
-
-    const playedPlayerIds = new Set(state.board.map(c => c.playedBy));
-    const pendingPlayers = state.players.filter(p => !playedPlayerIds.has(p.id));
-
-    for (const opp of pendingPlayers) {
-        const oppVoids = voidMap[opp.id] || new Set();
-        if (!isWinnerTrump) {
-            if (oppVoids.has(leadSuit) && !oppVoids.has(trumpSuit)) return false;
-        }
-        if (!oppVoids.has(currentWinnerCard.suit) && winnerRank < values.length - 1) {
-            return false;
-        }
-    }
-    return true;
-}
+// Feeding thresholds: the chance our team takes the trick must clear these for the card ACTUALLY
+// being fed. A provably secured trick needs no probability at all.
+const FEED_PROB_5 = 0.66;
+const FEED_PROB_10 = 0.72;
 
 function chooseCardHeuristic(playerId, state, excludeKaali) {
     const player = state.players.find(p => p.id === playerId);
@@ -557,13 +876,18 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
 
     if (validCards.length === 1) return validCards[0];
 
-    const voidMap = computeVoidMap(state);
+    const ctx = getCtx(playerId, state);
+    const voidMap = ctx.voidMap;
+    const trump = state.trumpSuit;
+    const nPlayers = state.players.length;
+    const lastSeat = state.board.length > 0 && state.board.length + 1 === nPlayers;
+    const mood = AI_FLAGS.bidAwareness ? getMood(ctx, state) : NEUTRAL_MOOD;
 
     // 2. CARD COUNTING
     const playedCodes = getTrickMemory(state).played;
     const boardCodes = new Set(state.board.map(cardCode));
 
-    const evictedCodes = getEvictedCardSet(state.players.length);
+    const evictedCodes = getEvictedCardSet(nPlayers);
     const isBoss = (card) => {
         const rankIdx = getCardRank(card);
         for (let r = rankIdx + 1; r < values.length; r++) {
@@ -580,10 +904,9 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
     const keepForHome = (card) =>
         isBoss(card) && !suitIsMature(state, card.suit, playerId, voidMap, FEED_TOP_CARD_MIN_ROUNDS);
 
-    // 3. DETERMINE TRUE TEAM ALLIANCE (certain, from our own hand vs. the full call list)
-    let myTrueTeam = determineMyTeam(playerId, state);
-
-    const beliefs = inferTeamBeliefs(playerId, state, voidMap);
+    // 3. TEAM ALLIANCE (certain, from our own hand vs. the full call list) + deductions
+    const myTrueTeam = ctx.myTeam;
+    const beliefs = ctx.beliefs;
 
     // 4. ANALYZE CURRENT BOARD
     let currentWinnerCard = null;
@@ -598,9 +921,9 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         for (let i = 1; i < state.board.length; i++) {
             const c = state.board[i];
             trickPoints += getCardPoints(c);
-            const isTrump = c.suit === state.trumpSuit;
-            const winIsTrump = currentWinnerCard.suit === state.trumpSuit;
-            
+            const isTrump = c.suit === trump;
+            const winIsTrump = currentWinnerCard.suit === trump;
+
             if (isTrump && !winIsTrump) {
                 currentWinnerCard = c;
             } else if ((isTrump && winIsTrump) || (!isTrump && !winIsTrump && c.suit === leadSuit)) {
@@ -612,20 +935,66 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         if (currentWinnerId === playerId) {
             isTeammateWinning = true;
         } else {
-            const affinity = computeTeamAffinity(state);
-            const effectiveWinnerTeam = guessTeam(currentWinnerId, state, affinity, beliefs);
+            const effectiveWinnerTeam = guessTeam(currentWinnerId, state, ctx.affinity, beliefs);
             if (effectiveWinnerTeam !== 'UNKNOWN' && effectiveWinnerTeam === myTrueTeam) {
                 isTeammateWinning = true;
             }
         }
     }
 
+    // ----- shared helpers -------------------------------------------------------------
+    const prob = (c) => estimateTeamTrickProb(playerId, state, c);
+    const secured = (c) => trickSecuredByCard(state, playerId, c, ctx);
+    const byPointsThenRankAsc = (a, b) => (getCardPoints(a) - getCardPoints(b)) || (getCardRank(a) - getCardRank(b));
+    const byRankAsc = (a, b) => getCardRank(a) - getCardRank(b);
+
+    const feedProbFor = (c) => {
+        if (isKaali(c)) return KAALI_FEED_PROB;
+        const base = getCardPoints(c) >= 10 ? FEED_PROB_10 : FEED_PROB_5;
+        return Math.max(0.55, Math.min(0.97, base - mood.feedShift));
+    };
+
+    // Highest-value point card that is safe to feed - judged on the card actually played.
+    const pickFeed = (cards, secureOnly) => {
+        const sorted = cards.filter(c => getCardPoints(c) > 0)
+            .sort((a, b) => (getCardPoints(b) - getCardPoints(a)) || byRankAsc(a, b));
+        for (const c of sorted) {
+            if (secured(c)) return c;
+            if (!secureOnly && prob(c) >= feedProbFor(c)) return c;
+        }
+        return null;
+    };
+
+    // Discarding when we cannot / will not win the trick: shed short suits (creates ruffing
+    // chances and frees us from following with points), keep small guards for our K/Q.
+    const suitLen = {};
+    player.hand.forEach(c => { suitLen[c.suit] = (suitLen[c.suit] || 0) + 1; });
+    const hasHonor = (s) => player.hand.some(c => c.suit === s && (c.value === 'K' || c.value === 'Q'));
+    const discardScore = (c) => {
+        let s = -10 * getCardPoints(c);
+        const len = suitLen[c.suit] || 1;
+        s += 4 * (4 - Math.min(len, 4));
+        if (len <= 2 && hasHonor(c.suit) && c.value !== 'K' && c.value !== 'Q') s -= 12;  // guard of our own honor
+        if (isBoss(c)) s -= 8;
+        s -= 0.3 * getCardRank(c);
+        return s;
+    };
+    const smartDiscard = (cards) => {
+        const zero = cards.filter(c => getCardPoints(c) === 0);
+        const pool = zero.length ? zero : cards;
+        if (!AI_FLAGS.smartDiscards) {
+            if (zero.length) return zero.slice().sort((a, b) => getCardRank(b) - getCardRank(a))[0];
+            return cards.slice().sort((a, b) => getCardPoints(a) - getCardPoints(b))[0];
+        }
+        return pool.slice().sort((a, b) => discardScore(b) - discardScore(a))[0];
+    };
+
     // --- STRATEGY SCENARIO 1: LEADING THE TRICK ---
     if (state.board.length === 0) {
         const others = state.players.filter(p => p.id !== playerId && p.hand.length > 0);
 
         const guaranteedSuits = suits.filter(s =>
-            s !== state.trumpSuit &&
+            s !== trump &&
             others.length > 0 &&
             others.every(p => (voidMap[p.id] || new Set()).has(s)) &&
             validCards.some(c => c.suit === s)
@@ -638,19 +1007,18 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
             })[0];
         }
 
-        const affinity = computeTeamAffinity(state);
         const enemiesHaveNoTrump = others.every(p => {
-            const effectiveTeam = p.team !== 'UNKNOWN' ? p.team : guessTeam(p.id, state, affinity, beliefs);
+            const effectiveTeam = p.team !== 'UNKNOWN' ? p.team : guessTeam(p.id, state, ctx.affinity, beliefs);
             if (effectiveTeam === myTrueTeam) return true; // Ignore teammates
-            return (voidMap[p.id] || new Set()).has(state.trumpSuit);
+            return (voidMap[p.id] || new Set()).has(trump);
         });
-        
+
         // Priority 1: play a Boss card (Guaranteed trick win without wasting trump)
         let thischanceBosses = validCards.filter(c => isBoss(c) && !isPrematureAceLead(c, player, state));
         if (thischanceBosses.length > 0) {
-            return thischanceBosses.sort((a,b) => {
-                const aIsTrump = a.suit === state.trumpSuit;
-                const bIsTrump = b.suit === state.trumpSuit;
+            return thischanceBosses.sort((a, b) => {
+                const aIsTrump = a.suit === trump;
+                const bIsTrump = b.suit === trump;
                 if (aIsTrump !== bIsTrump) {
                     if (enemiesHaveNoTrump) return aIsTrump ? 1 : -1;
                     return aIsTrump ? -1 : 1;
@@ -659,156 +1027,162 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
             })[0];
         }
 
-        // Priority 2: play a card (Guaranteed trick win even sometimes making other loose trumps)
+        // Priority 2: play a card with a high chance of taking the trick
         let highWinCards = [];
         for (let c of validCards) {
             if (isPrematureAceLead(c, player, state)) continue;
-            const prob = estimateTeamTrickProb(playerId, state, c);
-            if (prob >= 0.82) highWinCards.push(c);
+            if (prob(c) >= 0.82) highWinCards.push(c);
         }
         if (highWinCards.length > 0) {
             return highWinCards.sort((a, b) => {
-                if (a.suit === state.trumpSuit && b.suit !== state.trumpSuit) return 1;
+                if (a.suit === trump && b.suit !== trump) return 1;
                 if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
                 return getCardRank(b) - getCardRank(a);
             })[0];
         }
 
-        // Priority 3: Bleed a worthless non-trump card to void a suit safely
-        let trash = validCards.filter(c => c.suit !== state.trumpSuit && getCardPoints(c) === 0);
+        // Priority 3: bleed a worthless non-trump card. With seat awareness the choice looks at
+        // who sits behind us, the called cards (public), ruff risk and which suit to shorten.
+        const trash = validCards.filter(c => c.suit !== trump && getCardPoints(c) === 0);
         if (trash.length > 0) {
-            return trash.sort((a,b) => getCardRank(a) - getCardRank(b))[0];
+            if (!AI_FLAGS.seatAwareLeads) return trash.sort(byRankAsc)[0];
+
+            const lowestPerSuit = {};
+            trash.forEach(c => {
+                if (!lowestPerSuit[c.suit] || getCardRank(c) < getCardRank(lowestPerSuit[c.suit])) lowestPerSuit[c.suit] = c;
+            });
+            const calledAdjust = (c) => {
+                const called = ctx.calledLeft.filter(code => code.slice(-1) === c.suit);
+                if (!called.length) return 0;
+                const someoneCanHold = state.players.some(p => p.id !== playerId && p.hand.length > 0 &&
+                    p.team !== 'DEFENDER_TEAM' && !(voidMap[p.id] && voidMap[p.id].has(c.suit)));
+                if (!someoneCanHold) return 0;
+                if (myTrueTeam === 'BIDDER_TEAM') return 0.10;   // flush the partner's called card out under our lead
+                const topCalled = called.some(code => getCardRank({ value: code.slice(0, -1) }) > getCardRank(c));
+                return topCalled ? -0.12 : 0;                    // don't hand the called top card a free trick
+            };
+            let best = null, bestScore = -Infinity;
+            Object.values(lowestPerSuit).forEach(c => {
+                const len = suitLen[c.suit] || 1;
+                let score = prob(c) + calledAdjust(c);
+                score += 0.04 * (4 - Math.min(len, 4));                             // shorten short suits
+                if (len <= 2 && hasHonor(c.suit)) score -= 0.10;                    // don't strip our own K/Q
+                score -= 0.004 * getCardRank(c);
+                if (score > bestScore) { bestScore = score; best = c; }
+            });
+            if (best) return best;
+            return trash.sort(byRankAsc)[0];
         }
-        
+
         // Priority 4: Forced to play trump or point cards; play the lowest rank
-        return validCards.sort((a,b) => getCardRank(a) - getCardRank(b))[0];
+        return validCards.sort(byRankAsc)[0];
     }
 
     // --- STRATEGY SCENARIO 2: MUST FOLLOW SUIT ---
     if (hasLead) {
+        const dumpPool = (() => { const nk = validCards.filter(c => !isKaali(c)); return nk.length ? nk : validCards; })();
+        const dumpCard = dumpPool.slice().sort(byPointsThenRankAsc)[0];
+
         if (isTeammateWinning) {
-            const isTeammateWinGuaranteed = isTrickWinGuaranteed(state, currentWinnerCard, voidMap);
-            const prob = estimateTeamTrickProb(playerId, state, validCards[0]);
-            if (isTeammateWinGuaranteed || prob >= KAALI_FEED_PROB) {
-                const pointCards = validCards.filter(c => getCardPoints(c) > 0 && !keepForHome(c));
-                if (pointCards.length > 0) {
-                    return pointCards.sort((a, b) => {
-                        if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
-                        return getCardRank(a) - getCardRank(b); 
-                    })[0];
+            const feed = pickFeed(validCards.filter(c => !keepForHome(c)), false);
+            if (feed) return feed;
+
+            // Our winning teammate is likely to be overtaken and the trick is rich: take it over.
+            if (AI_FLAGS.secureTeammateTrick && !lastSeat && trickPoints >= 10 && currentWinnerId !== playerId) {
+                const pDuck = prob(dumpCard);
+                if (pDuck < 0.6) {
+                    const over = validCards.filter(c => !isKaali(c) && cardBeats(c, currentWinnerCard, trump));
+                    let bestP = -1;
+                    over.forEach(c => { bestP = Math.max(bestP, prob(c)); });
+                    if (over.length && bestP >= pDuck + 0.2) {
+                        return over.filter(c => prob(c) >= bestP - 0.05).sort(byRankAsc)[0];
+                    }
                 }
             }
-
-            // Duck safely
-            const safeDuck = validCards.filter(c => !isKaali(c));
-            const pool = safeDuck.length > 0 ? safeDuck : validCards;
-            return pool.sort((a, b) => {
-                if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(a) - getCardPoints(b);
-                return getCardRank(a) - getCardRank(b);
-            })[0];
+            return dumpCard;
         } else {
             // Enemy/Unknown is winning
-            let winningCards = validCards.filter(c => {
-                if (currentWinnerCard.suit === state.trumpSuit && leadSuit !== state.trumpSuit) return false;
+            const winningCards = validCards.filter(c => {
+                if (currentWinnerCard.suit === trump && leadSuit !== trump) return false;
                 return getCardRank(c) > getCardRank(currentWinnerCard);
             });
 
             if (winningCards.length > 0) {
-                let bestProb = -1;
-                for (let c of winningCards) {
-                    const prob = estimateTeamTrickProb(playerId, state, c);
-                    if (prob > bestProb) bestProb = prob;
-                }
+                if (lastSeat) {
+                    // Outcome is certain: win as cheaply as possible, unless it only burns a fresh top card for nothing.
+                    const cheapest = winningCards.slice().sort(byRankAsc)[0];
+                    const waste = AI_FLAGS.lastSeatRules && trickPoints === 0 && isBoss(cheapest) && keepForHome(cheapest);
+                    if (!waste) return cheapest;
+                } else {
+                    let bestProb = -1;
+                    for (let c of winningCards) bestProb = Math.max(bestProb, prob(c));
+                    const winThr = Math.max(0.35, Math.min(0.7, 0.55 - mood.contestShift));
 
-                // If the chance of holding the trick is good enough, play it
-                if (bestProb >= 0.55 || state.board.length + 1 === state.players.length) {
-                    const viable = winningCards.filter(c => estimateTeamTrickProb(playerId, state, c) >= bestProb - 0.05);
-                    return viable.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
+                    if (bestProb >= winThr) {
+                        const viable = winningCards.filter(c => prob(c) >= bestProb - 0.05);
+                        const winCard = viable.sort(byRankAsc)[0];
+                        // A teammate behind can pick it up: keep the high card, just dump.
+                        if (AI_FLAGS.matePickup && trickPoints > 0) {
+                            const pD = prob(dumpCard);
+                            if (pD >= 0.85 && pD >= bestProb - 0.05) return dumpCard;
+                        }
+                        return winCard;
+                    }
                 }
             }
-            
-            // Winning is too risky or impossible. Dump lowest value trash.
-            const nonKaali = validCards.filter(c => !isKaali(c));
-            const dumpPool = nonKaali.length > 0 ? nonKaali : validCards;
-            return dumpPool.sort((a, b) => {
-                if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(a) - getCardPoints(b);
-                return getCardRank(a) - getCardRank(b);
-            })[0];
+            return dumpCard;
         }
     }
 
     // --- STRATEGY SCENARIO 3: VOID IN LEAD SUIT (Can Trump or Discard) ---
-    let trumps = validCards.filter(c => c.suit === state.trumpSuit);
-    let nonTrumps = validCards.filter(c => c.suit !== state.trumpSuit);
+    const trumps = validCards.filter(c => c.suit === trump);
+    const nonTrumps = validCards.filter(c => c.suit !== trump);
 
     if (isTeammateWinning) {
-        const isTeammateWinGuaranteed = isTrickWinGuaranteed(state, currentWinnerCard, voidMap);
-        const prob = estimateTeamTrickProb(playerId, state, validCards[0]);
-        if (isTeammateWinGuaranteed || prob >= KAALI_FEED_PROB) {
-            const pointCards = validCards.filter(c => getCardPoints(c) > 0 && !keepForHome(c));
-            if (pointCards.length > 0) {
-                return pointCards.sort((a, b) => {
-                    if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
-                    return getCardRank(a) - getCardRank(b); 
-                })[0];
-            }
-        }
+        // Feed non-trump points first; a point-bearing trump only when the trick is provably ours.
+        let feed = pickFeed(nonTrumps.filter(c => !keepForHome(c)), false);
+        if (!feed) feed = pickFeed(trumps.filter(c => !keepForHome(c)), true);
+        if (feed) return feed;
 
-        if (nonTrumps.length > 0 && prob >= 0.60) {
-            let safePointsToFeed = nonTrumps.filter(c => getCardPoints(c) > 0 && getCardPoints(c) <= 10 && !keepForHome(c));
-            if (safePointsToFeed.length > 0) {
-                return safePointsToFeed.sort((a, b) => {
-                    if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
-                    return getCardRank(a) - getCardRank(b);
-                })[0];
-            }
-
-            return nonTrumps.sort((a, b) => getCardPoints(a) - getCardPoints(b))[0];
-        }
-        
-        if (nonTrumps.length > 0) {
-            let safeZero = nonTrumps.filter(c => getCardPoints(c) === 0);
-            if (safeZero.length > 0) return safeZero.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
-
-            return nonTrumps.sort((a, b) => getCardPoints(a) - getCardPoints(b))[0];
-        }
-        return trumps.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
+        if (nonTrumps.length > 0) return smartDiscard(nonTrumps);
+        return trumps.sort(byRankAsc)[0];
     } else {
         // Enemy is winning. Should we trump it?
-        let winningTrumps = trumps.filter(c => {
-            if (currentWinnerCard.suit === state.trumpSuit) return getCardRank(c) > getCardRank(currentWinnerCard);
+        const winningTrumps = trumps.filter(c => {
+            if (currentWinnerCard.suit === trump) return getCardRank(c) > getCardRank(currentWinnerCard);
             return true;
         });
+        const dump = nonTrumps.length > 0 ? smartDiscard(nonTrumps) : null;
 
         if (winningTrumps.length > 0) {
             let bestProb = -1;
-            for (let c of winningTrumps) {
-                const prob = estimateTeamTrickProb(playerId, state, c);
-                if (prob > bestProb) bestProb = prob;
-            }
+            for (let c of winningTrumps) bestProb = Math.max(bestProb, prob(c));
+            const thr = Math.max(0.3, Math.min(0.6, 0.45 - mood.contestShift));
 
-            if (bestProb >= 0.45 || state.board.length + 1 === state.players.length) {
-                const viable = winningTrumps.filter(c => estimateTeamTrickProb(playerId, state, c) >= bestProb - 0.05);
-                const cheapest = viable.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
-                if (trickPoints >= 10 || getCardPoints(cheapest) === 0 || bestProb >= 0.8) {
+            if (lastSeat || bestProb >= thr) {
+                const viable = winningTrumps.filter(c => prob(c) >= bestProb - 0.05);
+                const cheapest = viable.sort(byRankAsc)[0];
+                const cheapTrump = getCardRank(cheapest) <= getCardRank({ value: '8' });
+                // Worth a trump? Rich tricks yes; a small trump for a small trick yes; never a big
+                // trump on a worthless trick.
+                const worth = trickPoints >= 10
+                    || (trickPoints >= 5 && (getCardPoints(cheapest) === 0 || bestProb >= 0.8))
+                    || (getCardPoints(cheapest) === 0 && cheapTrump && bestProb >= 0.8);
+                if (worth) {
+                    if (AI_FLAGS.matePickup && !lastSeat && dump && trickPoints > 0) {
+                        const pD = prob(dump);
+                        if (pD >= 0.85 && pD >= bestProb - 0.05) return dump;
+                    }
                     return cheapest;
                 }
             }
         }
 
-        // Refuse to waste a high trump on a 0-point trick, or we simply have no trumps. Dump trash.
-        if (nonTrumps.length > 0) {
-            let zeroPointTrash = nonTrumps.filter(c => getCardPoints(c) === 0);
-            if (zeroPointTrash.length > 0) {
-                // Dump highest rank 0-point card to clear out high-liability garbage
-                return zeroPointTrash.sort((a,b) => getCardRank(b) - getCardRank(a))[0];
-            }
-            // Forced to dump points. Dump the lowest points possible.
-            return nonTrumps.sort((a,b) => getCardPoints(a) - getCardPoints(b))[0];
-        }
+        // Refuse to waste a high trump on a poor trick, or we simply have no trumps. Discard.
+        if (dump) return dump;
 
         // Absolutely forced to play a trump on a lost trick
-        return validCards.sort((a,b) => getCardRank(a) - getCardRank(b))[0];
+        return validCards.sort(byRankAsc)[0];
     }
 }
 
@@ -898,98 +1272,81 @@ function unseenCardPool(state, excludeHand, numPlayersOverride) {
 }
 
 // ---------------------------------------------------------------------------------------
-// 4. ENDGAME LOOKAHEAD - last few tricks only. For each of our legal plays, sample a few
-//    plausible worlds (opponents dealt random-but-void-respecting hands of the right size),
-//    play the rest of the hand out with the shared heuristic, and see which of our own
-//    choices actually scored best on average. This is a Monte Carlo rollout, not exhaustive
-//    minimax - deliberately bounded (small hand sizes, few samples) so it's cheap enough to
-//    run on every relevant turn without any risk of hitching the page.
+// 4. ENDGAME LOOKAHEAD - last few tricks only. A handful of plausible worlds is sampled ONCE
+//    (called cards only with seats that could hold them, voids and hand sizes respected) and
+//    every legal play is rolled out in the SAME worlds, so the comparison between candidate
+//    cards is paired and far less noisy. The objective is winning the bid; points are only a
+//    tie-break (or the whole objective when the bid is unknown). Bounded by a time budget.
 // ---------------------------------------------------------------------------------------
 
 const ENDGAME_SEARCH_MAX_HAND = 6;
-const ENDGAME_SAMPLES = 8;
+const ENDGAME_SAMPLES = 10;
+const ENDGAME_TIME_BUDGET_MS = 1000;
 
-function buildDeterminizedSimState(state, myId, voidMap) {
+function buildSimFromWorld(state, myId, world, ctx) {
     const me = state.players.find(p => p.id === myId);
-    const pool = unseenCardPool(state, me.hand);
-
-    const simPlayers = state.players.map(p => {
-        if (p.id === myId) {
-            return {
-                id: p.id, hand: me.hand.map(c => ({ ...c })),
-                wonCards: (p.wonCards || []).map(c => ({ ...c })), team: p.team, points: p.points || 0
-            };
-        }
-        return {
-            id: p.id, hand: [],
-            wonCards: (p.wonCards || []).map(c => ({ ...c })), team: p.team, points: p.points || 0
-        };
-    });
-
-    state.players.forEach(p => {
-        if (p.id === myId) return;
-        const target = simPlayers.find(sp => sp.id === p.id);
-        const need = p.hand.length;
-        const voids = voidMap[p.id] || new Set();
-        let taken = 0;
-        for (let i = 0; i < pool.length && taken < need; i++) {
-            if (pool[i] && !voids.has(pool[i].suit)) {
-                target.hand.push(pool[i]);
-                pool[i] = null;
-                taken++;
-            }
-        }
-        if (taken < need) {
-            // Voids left too few "safe" cards to fill this sample (can happen with several
-            // simultaneous voids) - fall back to whatever's left so the sample stays complete.
-            for (let i = 0; i < pool.length && taken < need; i++) {
-                if (pool[i]) { target.hand.push(pool[i]); pool[i] = null; taken++; }
-            }
-        }
-    });
-
+    const simPlayers = state.players.map(p => ({
+        id: p.id,
+        hand: (p.id === myId ? me.hand : world.hands[p.id]).map(c => ({ ...c })),
+        wonCards: (p.wonCards || []).map(c => ({ ...c })),
+        team: p.team,
+        points: sumCardPoints(p.wonCards)
+    }));
     const simState = {
         players: simPlayers,
         board: state.board.map(c => ({ ...c })),
         trumpSuit: state.trumpSuit,
         calledCards: [...(state.calledCards || [])],
-        turnIndex: state.turnIndex
+        turnIndex: state.turnIndex,
+        __sim: true
     };
+    if (ctx && ctx.bid != null) simState.__bid = ctx.bid;
     seedTrickMemory(simState, state);
     return simState;
 }
 
-function teamPointsIn(sim, myId, myTeam) {
-    let total = 0;
+// Bidder-team / defender points at the end of a finished playout. A seat whose team is still
+// unresolved at the end held no called card: it is a defender (we resolve ourselves via myTeam).
+function finalPointsByTeam(sim, myId, myTeam) {
+    let b = 0, d = 0;
     sim.players.forEach(p => {
-        const t = p.team !== 'UNKNOWN' ? p.team : (p.id === myId ? myTeam : 'UNKNOWN');
-        if (t === myTeam) total += p.points || 0;
+        let t = p.team;
+        if (t === 'UNKNOWN') t = p.id === myId ? myTeam : 'DEFENDER_TEAM';
+        if (t === 'BIDDER_TEAM') b += p.points || 0; else d += p.points || 0;
     });
-    return total;
+    return { b, d };
+}
+
+function scoreEndgameOutcome(sim, myId, myTeam, bid) {
+    const { b, d } = finalPointsByTeam(sim, myId, myTeam);
+    const mine = myTeam === 'BIDDER_TEAM' ? b : d;
+    if (bid == null) return mine;
+    const win = myTeam === 'BIDDER_TEAM' ? b >= bid : b < bid;
+    return (win ? 1 : 0) + mine / 1000;
 }
 
 function getBestCardToPlayEndgame(playerId, state, legalCards) {
-    const myTeam = determineMyTeam(playerId, state);
-    const voidMap = computeVoidMap(state);
+    const ctx = getCtx(playerId, state);
+    const bid = AI_FLAGS.endgameBidObjective ? ctx.bid : null;
+    const totals = legalCards.map(() => 0);
+    const t0 = Date.now();
+    let done = 0;
 
-    let bestCard = legalCards[0];
-    let bestScore = -Infinity;
-
-    legalCards.forEach(candidate => {
-        let total = 0;
-        let samples = 0;
-        for (let s = 0; s < ENDGAME_SAMPLES; s++) {
-            const sim = buildDeterminizedSimState(state, playerId, voidMap);
-            simPlayCard(sim, playerId, candidate);
+    for (let s = 0; s < ENDGAME_SAMPLES; s++) {
+        const world = dealWorld(ctx, state, playerId);
+        for (let i = 0; i < legalCards.length; i++) {
+            const sim = buildSimFromWorld(state, playerId, world, ctx);
+            simPlayCard(sim, playerId, legalCards[i]);
             runPlayout(sim);
-            total += teamPointsIn(sim, playerId, myTeam);
-            samples++;
+            totals[i] += scoreEndgameOutcome(sim, playerId, ctx.myTeam, bid);
         }
-        const avg = samples > 0 ? total / samples : 0;
-        if (avg > bestScore) { bestScore = avg; bestCard = candidate; }
-    });
+        done++;
+        if (done >= 3 && Date.now() - t0 > ENDGAME_TIME_BUDGET_MS) break;
+    }
 
-    return bestCard;
+    let bestIdx = 0;
+    for (let i = 1; i < totals.length; i++) if (totals[i] > totals[bestIdx]) bestIdx = i;
+    return legalCards[bestIdx];
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1005,41 +1362,45 @@ const BID_RISK_LAMBDA = 0.60;   // std-devs below the expected score we bid (tun
 const BID_MIN_SIGMA = 6;        // floor on the spread so a near-deterministic sim (2p) still gets a margin
 const TOTAL_POINTS = 250;
 
-function simulateHandAsBidder(hand, numPlayers) {
+// Random deal of the other seats' hands for a bidding / trump-choice simulation.
+function dealOpponentHands(hand, numPlayers) {
     const cardsPerPlayer = Math.min(13, Math.floor(52 / numPlayers));
     if (hand.length > cardsPerPlayer) return null; // inconsistent guess at numPlayers - skip this sample
-
     const pool = unseenCardPool({ players: [], board: [] }, hand, numPlayers);
-    const myId = 'sim_me';
-    const simPlayers = [{ id: myId, hand: hand.map(c => ({ ...c })), wonCards: [], team: 'UNKNOWN', points: 0 }];
-
+    const hands = [];
     let cursor = 0;
     for (let i = 1; i < numPlayers; i++) {
-        simPlayers.push({
-            id: 'sim_opp_' + i,
-            hand: pool.slice(cursor, cursor + cardsPerPlayer),
-            wonCards: [], team: 'UNKNOWN', points: 0
-        });
+        hands.push(pool.slice(cursor, cursor + cardsPerPlayer));
         cursor += cardsPerPlayer;
     }
+    return hands;
+}
 
-    const meSim = simPlayers[0];
-    meSim.team = 'BIDDER_TEAM';
-    const trumpChoice = getCpuTrumpChoice(meSim, numPlayers);
-
+// Plays a full hand with `choice` ({suit, calls}) as bidder against the given opponent hands and
+// returns the bidder team's points.
+function playBidderSim(hand, oppHands, choice, bid) {
+    const myId = 'sim_me';
+    const simPlayers = [{ id: myId, hand: hand.map(c => ({ ...c })), wonCards: [], team: 'BIDDER_TEAM', points: 0 }];
+    oppHands.forEach((h, i) => {
+        simPlayers.push({ id: 'sim_opp_' + (i + 1), hand: h.map(c => ({ ...c })), wonCards: [], team: 'UNKNOWN', points: 0 });
+    });
     const sim = {
-        players: simPlayers,
-        board: [],
-        trumpSuit: trumpChoice.suit,
-        calledCards: [...trumpChoice.calls],
-        turnIndex: 0
+        players: simPlayers, board: [], trumpSuit: choice.suit,
+        calledCards: [...choice.calls], turnIndex: 0, __sim: true
     };
-
+    if (bid != null) sim.__bid = bid;
     runPlayout(sim);
-
     let bidderPoints = 0;
     sim.players.forEach(p => { if (p.team === 'BIDDER_TEAM') bidderPoints += p.points; });
     return bidderPoints;
+}
+
+function simulateHandAsBidder(hand, numPlayers) {
+    const oppHands = dealOpponentHands(hand, numPlayers);
+    if (!oppHands) return null;
+    const meSim = { hand, team: 'BIDDER_TEAM' };
+    const choice = getCpuTrumpChoiceHeuristic(meSim, numPlayers);   // heuristic: no nested simulation
+    return playBidderSim(hand, oppHands, choice, null);
 }
 
 function getTeamStructure(numPlayers) {
@@ -1100,67 +1461,155 @@ function getEvictedCardSet(numPlayers) {
 }
 
 /**
- * Trump suit + partner calls for a CPU that won the bid. Trump is whichever suit it holds
- * the most (and highest-value) cards of; partner calls prioritize the strongest ranks it
- * does NOT hold itself, spread across suits, skipping any card this deal doesn't even
- * contain - calling a card already in your own hand, or one that was cut from the deck
- * entirely, can never find a teammate.
+ * Trump suit + partner calls, heuristic version (cheap; used inside the bidding simulations).
+ * Trump is whichever suit the hand holds the most (and highest-value) cards of; partner calls
+ * prioritise the strongest ranks the bidder does NOT hold, skipping cards this deal doesn't
+ * contain - calling a card in your own hand, or one cut from the deck, can never find a teammate.
  */
-function getCpuTrumpChoice(player, numPlayers) {
+function trumpSuitRanking(hand) {
     const bySuit = {};
     suits.forEach(s => bySuit[s] = []);
-    player.hand.forEach(c => { if (bySuit[c.suit]) bySuit[c.suit].push(c); });
-
-    let bestSuit = suits[0], bestScore = -1;
-    suits.forEach(s => {
+    hand.forEach(c => { if (bySuit[c.suit]) bySuit[c.suit].push(c); });
+    const ranked = suits.map(s => {
         const cards = bySuit[s];
-        const score = cards.length * 10 + cards.reduce((sum, c) => sum + getCardPoints(c), 0);
-        if (score > bestScore) { bestScore = score; bestSuit = s; }
+        return { suit: s, score: cards.length * 10 + cards.reduce((sum, c) => sum + getCardPoints(c), 0) };
     });
+    ranked.sort((a, b) => b.score - a.score);   // stable: ties keep suit order
+    return ranked;
+}
 
-    const allowedCards = Math.floor((numPlayers - 2) / 2);
+function scoreCallCard(v, s, trumpSuit) {
+    const isTrump = s === trumpSuit;
+    const isSpade = s === '♠';
+    if (isTrump) {
+        if (v === 'A') return 200;
+        if (v === 'K') return 180;
+        if (v === 'Q') return 160;
+        if (v === 'J') return 70;
+        if (v === '10') return 65;
+        return getCardRank({ value: v }) + 10;
+    }
+    if (isSpade) {
+        if (v === 'A') return 150;
+        if (v === 'K') return 130;
+        if (v === 'Q') return 110;
+        if (v === 'J') return 50;
+        if (v === '10') return 45;
+        return getCardRank({ value: v });
+    }
+    if (v === 'A') return 100;
+    if (v === 'K') return 80;
+    if (v === 'Q') return 60;
+    if (v === 'J') return 40;
+    if (v === '10') return 35;
+    return getCardRank({ value: v });
+}
+
+// mode: 'top' (best-scoring cards), 'spread' (at most one call per suit first),
+//       'trumpFirst' (the trump suit's top cards first).
+function buildCalls(player, numPlayers, trumpSuit, mode) {
+    const allowed = Math.floor((numPlayers - 2) / 2);
+    if (allowed <= 0) return [];
     const ownSet = new Set(player.hand.map(c => `${c.value}${c.suit}`));
     const evicted = getEvictedCardSet(numPlayers);
-    
-    let candidateScores = [];
-    suits.forEach(s => {
-        values.forEach(v => {
-            const code = `${v}${s}`;
-            if (ownSet.has(code) || evicted.has(code)) return;
-            if (v === '3' && s === '♠') return; 
-            
-            let score = 0;
-            const isTrump = s === bestSuit;
-            const isSpade = s === '♠';
-            
-            if (isTrump) {
-                if (v === 'A') score = 200;
-                else if (v === 'K') score = 180;
-                else if (v === 'Q') score = 160;
-                else if (v === 'J') score = 70;
-                else if (v === '10') score = 65;
-                else score = getCardRank({value: v}) + 10;
-            } else if (isSpade) {
-                if (v === 'A') score = 150;
-                else if (v === 'K') score = 130;
-                else if (v === 'Q') score = 110;
-                else if (v === 'J') score = 50;
-                else if (v === '10') score = 45;
-                else score = getCardRank({value: v});
-            } else {
-                if (v === 'A') score = 100;
-                else if (v === 'K') score = 80;
-                else if (v === 'Q') score = 60;
-                else if (v === 'J') score = 40;
-                else if (v === '10') score = 35;
-                else score = getCardRank({value: v});
-            }
-            candidateScores.push({ code, score });
+    const cands = [];
+    suits.forEach(s => values.forEach(v => {
+        const code = `${v}${s}`;
+        if (ownSet.has(code) || evicted.has(code)) return;
+        if (v === '3' && s === '♠') return;
+        cands.push({ code, suit: s, score: scoreCallCard(v, s, trumpSuit) });
+    }));
+    cands.sort((a, b) => b.score - a.score);
+
+    if (mode === 'spread') {
+        const picked = [], usedSuits = new Set();
+        for (const c of cands) {
+            if (picked.length >= allowed) break;
+            if (!usedSuits.has(c.suit)) { picked.push(c); usedSuits.add(c.suit); }
+        }
+        for (const c of cands) {
+            if (picked.length >= allowed) break;
+            if (!picked.includes(c)) picked.push(c);
+        }
+        return picked.map(c => c.code);
+    }
+    if (mode === 'trumpFirst') {
+        const ordered = cands.filter(c => c.suit === trumpSuit).concat(cands.filter(c => c.suit !== trumpSuit));
+        return ordered.slice(0, allowed).map(c => c.code);
+    }
+    return cands.slice(0, allowed).map(c => c.code);
+}
+
+function getCpuTrumpChoiceHeuristic(player, numPlayers) {
+    const ranked = trumpSuitRanking(player.hand);
+    const suit = ranked[0].suit;
+    return { suit, calls: buildCalls(player, numPlayers, suit, 'top') };
+}
+
+const TRUMP_SIM_SAMPLES = 24;
+const TRUMP_SIM_TIME_BUDGET_MS = 700;
+
+/**
+ * Chooses trump and partner calls by simulation: the top suits crossed with a few call styles
+ * are all played out on the SAME random deals (paired), and the option that wins the bid most
+ * often (points only as tie-break; plain points when the bid is unknown) is picked. The
+ * heuristic choice is the default and is only replaced by a clearly better option.
+ */
+function chooseTrumpAndCallsBySimulation(player, numPlayers, bid, base) {
+    const ranked = trumpSuitRanking(player.hand);
+    const combos = [{ suit: base.suit, calls: base.calls }];
+    const seen = new Set([base.suit + base.calls.join(',')]);
+    ranked.slice(0, 3).forEach(r => {
+        ['top', 'spread', 'trumpFirst'].forEach(mode => {
+            const choice = { suit: r.suit, calls: buildCalls(player, numPlayers, r.suit, mode) };
+            const key = choice.suit + choice.calls.join(',');
+            if (!seen.has(key)) { seen.add(key); combos.push(choice); }
         });
     });
+    if (combos.length < 2) return base;
 
-    candidateScores.sort((a, b) => b.score - a.score);
-    const calls = candidateScores.slice(0, allowedCards).map(c => c.code);
+    const wins = combos.map(() => 0), pts = combos.map(() => 0);
+    const t0 = Date.now();
+    let done = 0;
+    for (let s = 0; s < TRUMP_SIM_SAMPLES; s++) {
+        const oppHands = dealOpponentHands(player.hand, numPlayers);
+        if (!oppHands) return base;
+        combos.forEach((choice, i) => {
+            const p = playBidderSim(player.hand, oppHands, choice, bid);
+            pts[i] += p;
+            if (bid != null && p >= bid) wins[i]++;
+        });
+        done++;
+        if (done >= 8 && Date.now() - t0 > TRUMP_SIM_TIME_BUDGET_MS) break;
+    }
+    if (done < 8) return base;
 
-    return { suit: bestSuit, calls: calls };
+    let best = 0;
+    const better = (i, j) => bid != null
+        ? (wins[i] > wins[j] || (wins[i] === wins[j] && pts[i] > pts[j]))
+        : pts[i] > pts[j];
+    for (let i = 1; i < combos.length; i++) if (better(i, best)) best = i;
+    if (best === 0) return base;
+
+    // Switch away from the heuristic only on a clear margin (guards against sampling noise).
+    const clear = bid != null
+        ? (wins[best] - wins[0] >= 2 || (wins[best] === wins[0] && (pts[best] - pts[0]) / done >= 3))
+        : (pts[best] - pts[0]) / done >= 2;
+    return clear ? combos[best] : base;
+}
+
+/**
+ * Entry point used by game.js after the bid is won. Pass the winning bid as the third argument
+ * (getCpuTrumpChoice(player, numPlayers, bidAmount)); without it the choice is scored on
+ * expected points instead of on winning the bid.
+ */
+function getCpuTrumpChoice(player, numPlayers, bidAmount) {
+    const base = getCpuTrumpChoiceHeuristic(player, numPlayers);
+    if (!AI_FLAGS.simTrumpChoice) return base;
+    try {
+        const bid = (typeof bidAmount === 'number' && bidAmount > 0) ? bidAmount : null;
+        return chooseTrumpAndCallsBySimulation(player, numPlayers, bid, base) || base;
+    } catch (e) {
+        return base;
+    }
 }

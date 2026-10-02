@@ -201,10 +201,12 @@ function computeTeamAffinity(state) {
 }
 
 const TEAM_AFFINITY_THRESHOLD = 3.5;
-function guessTeam(playerId, state, affinity) {
+function guessTeam(playerId, state, affinity, beliefs) {
     const p = state.players.find(pl => pl.id === playerId);
     if (!p) return 'UNKNOWN';
     if (p.team !== 'UNKNOWN') return p.team;
+    // Logical deduction beats the statistical affinity guess.
+    if (beliefs && beliefs[playerId] && beliefs[playerId].team !== 'UNKNOWN') return beliefs[playerId].team;
     const score = affinity ? (affinity[playerId] || 0) : 0;
     if (score >= TEAM_AFFINITY_THRESHOLD) return 'BIDDER_TEAM';
     if (score <= -TEAM_AFFINITY_THRESHOLD) return 'DEFENDER_TEAM';
@@ -222,6 +224,62 @@ function determineMyTeam(playerId, state) {
         : (state.calledCards || []);
     if (everCalled.length === 0) return 'DEFENDER_TEAM';
     return everCalled.some(code => myCodes.has(code)) ? 'BIDDER_TEAM' : 'DEFENDER_TEAM';
+}
+
+// ---------------------------------------------------------------------------------------
+// TEAM INFERENCE FROM THE PUBLIC CALLED CARDS
+// The called partner cards are public. Every called card that has not been played yet (and is
+// not in our hand or cut from the deck) sits in somebody else's hand. A player who has shown
+// void in that card's suit, who holds no cards, or who is already revealed as a Defender cannot
+// be its holder. So:
+//   - exactly one possible holder left        -> that player is a CERTAIN partner
+//   - an unknown player who cannot hold ANY unplayed called card -> a CERTAIN defender
+//     (assumes the bidder's own team is already marked, as it is in the simulations; switch
+//      ENABLE_DEFENDER_INFERENCE off if the live game leaves the bidder as UNKNOWN)
+//   - otherwise each card is split evenly over its remaining holders to give a per-player
+//     chance of being a partner, which is sharper than one flat prior for every seat.
+// Only public facts plus our own hand are read; opponents' hand SIZES, never contents.
+// ---------------------------------------------------------------------------------------
+
+const ENABLE_DEFENDER_INFERENCE = true;
+
+function inferTeamBeliefs(playerId, state, voidMapIn) {
+    const beliefs = {};
+    const me = state.players.find(p => p.id === playerId);
+    if (!me) return beliefs;
+
+    const mem = getTrickMemory(state);
+    const voidMap = voidMapIn || computeVoidMap(state);
+    const evicted = getEvictedCardSet(state.players.length);
+    const myCodes = new Set(me.hand.map(cardCode));
+    const boardCodes = new Set(state.board.map(cardCode));
+
+    const calledLeft = (state.calledCards || []).filter(code =>
+        !myCodes.has(code) && !evicted.has(code) && !mem.played.has(code) && !boardCodes.has(code));
+
+    const others = state.players.filter(p => p.id !== playerId);
+    const holders = calledLeft.map(code => {
+        const suit = code.slice(-1);
+        return others.filter(p =>
+            p.hand.length > 0 &&
+            p.team !== 'DEFENDER_TEAM' &&
+            !(voidMap[p.id] && voidMap[p.id].has(suit)));
+    });
+
+    others.forEach(p => {
+        if (p.team !== 'UNKNOWN') { beliefs[p.id] = { team: p.team, pBidder: p.team === 'BIDDER_TEAM' ? 1 : 0 }; return; }
+        let pNone = 1, sole = false, canHoldAny = false;
+        holders.forEach(h => {
+            if (!h.some(x => x.id === p.id)) return;
+            canHoldAny = true;
+            if (h.length === 1) sole = true;
+            pNone *= (1 - 1 / h.length);
+        });
+        if (sole) { beliefs[p.id] = { team: 'BIDDER_TEAM', pBidder: 1 }; return; }
+        if (ENABLE_DEFENDER_INFERENCE && !canHoldAny) { beliefs[p.id] = { team: 'DEFENDER_TEAM', pBidder: 0 }; return; }
+        beliefs[p.id] = { team: 'UNKNOWN', pBidder: 1 - pNone };
+    });
+    return beliefs;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -264,9 +322,10 @@ function probHoldsAny(h, U, K) {
 }
 
 // Chance a given other player is on the OTHER team from `myTeam`.
-function makeEnemyProbFn(playerId, state, myTeam) {
+function makeEnemyProbFn(playerId, state, myTeam, voidMap) {
     const me = state.players.find(p => p.id === playerId);
     const affinity = computeTeamAffinity(state);
+    const beliefs = inferTeamBeliefs(playerId, state, voidMap);
     const myCodes = new Set(me.hand.map(c => `${c.value}${c.suit}`));
     const unknownOthers = state.players.filter(p => p.id !== playerId && p.team === 'UNKNOWN').length;
     const calledLeft = (state.calledCards || []).filter(code => !myCodes.has(code));
@@ -282,8 +341,14 @@ function makeEnemyProbFn(playerId, state, myTeam) {
 
     return (r) => {
         if (r.team !== 'UNKNOWN') return r.team === myTeam ? 0 : 1;
-        const g = guessTeam(r.id, state, affinity);
+        const b = beliefs[r.id];
+        if (b && b.team !== 'UNKNOWN') return b.team === myTeam ? 0 : 1;   // deduced for certain
+        const g = guessTeam(r.id, state, affinity);                         // affinity only
         if (g !== 'UNKNOWN') return g === myTeam ? 0.15 : 0.85;
+        if (b) {
+            const pEnemy = myTeam === 'BIDDER_TEAM' ? 1 - b.pBidder : b.pBidder;
+            return Math.max(0.03, Math.min(0.97, pEnemy));
+        }
         return prior;
     };
 }
@@ -312,7 +377,7 @@ function estimateTeamTrickProb(playerId, state, card) {
 
     const unseen = listUnseenCards(state, me.hand);
     const voidMap = computeVoidMap(state);
-    const enemyProb = makeEnemyProbFn(playerId, state, myTeam);
+    const enemyProb = makeEnemyProbFn(playerId, state, myTeam, voidMap);
 
     const pBeat = (r) => {
         const voids = voidMap[r.id] || new Set();
@@ -518,6 +583,8 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
     // 3. DETERMINE TRUE TEAM ALLIANCE (certain, from our own hand vs. the full call list)
     let myTrueTeam = determineMyTeam(playerId, state);
 
+    const beliefs = inferTeamBeliefs(playerId, state, voidMap);
+
     // 4. ANALYZE CURRENT BOARD
     let currentWinnerCard = null;
     let currentWinnerId = null;
@@ -546,7 +613,7 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
             isTeammateWinning = true;
         } else {
             const affinity = computeTeamAffinity(state);
-            const effectiveWinnerTeam = guessTeam(currentWinnerId, state, affinity);
+            const effectiveWinnerTeam = guessTeam(currentWinnerId, state, affinity, beliefs);
             if (effectiveWinnerTeam !== 'UNKNOWN' && effectiveWinnerTeam === myTrueTeam) {
                 isTeammateWinning = true;
             }
@@ -573,7 +640,7 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
 
         const affinity = computeTeamAffinity(state);
         const enemiesHaveNoTrump = others.every(p => {
-            const effectiveTeam = p.team !== 'UNKNOWN' ? p.team : guessTeam(p.id, state, affinity);
+            const effectiveTeam = p.team !== 'UNKNOWN' ? p.team : guessTeam(p.id, state, affinity, beliefs);
             if (effectiveTeam === myTrueTeam) return true; // Ignore teammates
             return (voidMap[p.id] || new Set()).has(state.trumpSuit);
         });
@@ -654,7 +721,7 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
                 }
 
                 // If the chance of holding the trick is good enough, play it
-                if (bestProb >= 0.60 || state.board.length + 1 === state.players.length) {
+                if (bestProb >= 0.55 || state.board.length + 1 === state.players.length) {
                     const viable = winningCards.filter(c => estimateTeamTrickProb(playerId, state, c) >= bestProb - 0.05);
                     return viable.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
                 }

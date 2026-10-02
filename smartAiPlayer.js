@@ -403,6 +403,48 @@ function getBestCardToPlayInner(playerId, state) {
     return chooseCardHeuristic(playerId, state, excludeKaali);
 }
 
+// ---------------------------------------------------------------------------------------
+// TOP-CARD DISCIPLINE
+// The highest card still out in a suit (usually its Ace) wins its own trick sooner or later, so
+// it shouldn't be spent where it earns nothing:
+//   - leading it into a suit nobody has played yet only makes everyone follow with zero-point
+//     cards (the points are still safely hidden in their hands), and
+//   - feeding it to a teammate moves points that were coming home anyway.
+// Both change once the suit has been played for a while: players start running out of it, so
+// point cards get forced out - and the top card risks being ruffed, so it's time to use it.
+// ---------------------------------------------------------------------------------------
+
+const SMALL_TABLE_MAX_PLAYERS = 6;   // with more players, suits thin out fast enough to lead aces freely
+const LEAD_ACE_MIN_ROUNDS = 1;       // an Ace may be led once its suit has already been led this many times
+const FEED_TOP_CARD_MIN_ROUNDS = 2;  // a top card may be fed to a teammate once its suit has been led this often
+
+// How many completed tricks were led in `suit`.
+function suitRoundsLed(state, suit) {
+    let rounds = 0;
+    for (const t of getTrickMemory(state).tricks) {
+        if (t.cards[0].suit === suit) rounds++;
+    }
+    return rounds;
+}
+
+// True when the suit has been played enough (or someone has already shown void in it) that the
+// players still holding it are running short - i.e. a top card in it is no longer a sure homecomer.
+function suitIsMature(state, suit, playerId, voidMap, minRounds) {
+    if (suitRoundsLed(state, suit) >= minRounds) return true;
+    return state.players.some(p => p.id !== playerId && p.hand.length > 0 &&
+        (voidMap[p.id] || new Set()).has(suit));
+}
+
+// Leading a lone Ace into a fresh suit at a small table: nobody has to give up a point card yet.
+// Holding the King as well makes it worthwhile (the pair keeps winning), as does a suit that has
+// already been led.
+function isPrematureAceLead(card, player, state) {
+    if (state.players.length > SMALL_TABLE_MAX_PLAYERS) return false;
+    if (card.value !== 'A') return false;
+    if (suitRoundsLed(state, card.suit) >= LEAD_ACE_MIN_ROUNDS) return false;
+    return !player.hand.some(c => c.suit === card.suit && c.value === 'K');
+}
+
 function isTrickWinGuaranteed(state, currentWinnerCard, voidMap) {
     if (!currentWinnerCard) return false;
     const cardsPlayedSoFar = state.board.length + 1; 
@@ -469,6 +511,10 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         return true;
     };
 
+    // A top card of a suit that is still fresh will come home by itself: don't feed it away.
+    const keepForHome = (card) =>
+        isBoss(card) && !suitIsMature(state, card.suit, playerId, voidMap, FEED_TOP_CARD_MIN_ROUNDS);
+
     // 3. DETERMINE TRUE TEAM ALLIANCE (certain, from our own hand vs. the full call list)
     let myTrueTeam = determineMyTeam(playerId, state);
 
@@ -533,7 +579,7 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         });
         
         // Priority 1: play a Boss card (Guaranteed trick win without wasting trump)
-        let thischanceBosses = validCards.filter(c => isBoss(c));
+        let thischanceBosses = validCards.filter(c => isBoss(c) && !isPrematureAceLead(c, player, state));
         if (thischanceBosses.length > 0) {
             return thischanceBosses.sort((a,b) => {
                 const aIsTrump = a.suit === state.trumpSuit;
@@ -549,6 +595,7 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         // Priority 2: play a card (Guaranteed trick win even sometimes making other loose trumps)
         let highWinCards = [];
         for (let c of validCards) {
+            if (isPrematureAceLead(c, player, state)) continue;
             const prob = estimateTeamTrickProb(playerId, state, c);
             if (prob >= 0.82) highWinCards.push(c);
         }
@@ -576,7 +623,7 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
             const isTeammateWinGuaranteed = isTrickWinGuaranteed(state, currentWinnerCard, voidMap);
             const prob = estimateTeamTrickProb(playerId, state, validCards[0]);
             if (isTeammateWinGuaranteed || prob >= KAALI_FEED_PROB) {
-                const pointCards = validCards.filter(c => getCardPoints(c) > 0);
+                const pointCards = validCards.filter(c => getCardPoints(c) > 0 && !keepForHome(c));
                 if (pointCards.length > 0) {
                     return pointCards.sort((a, b) => {
                         if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
@@ -631,7 +678,7 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         const isTeammateWinGuaranteed = isTrickWinGuaranteed(state, currentWinnerCard, voidMap);
         const prob = estimateTeamTrickProb(playerId, state, validCards[0]);
         if (isTeammateWinGuaranteed || prob >= KAALI_FEED_PROB) {
-            const pointCards = validCards.filter(c => getCardPoints(c) > 0);
+            const pointCards = validCards.filter(c => getCardPoints(c) > 0 && !keepForHome(c));
             if (pointCards.length > 0) {
                 return pointCards.sort((a, b) => {
                     if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
@@ -641,8 +688,13 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         }
 
         if (nonTrumps.length > 0 && prob >= 0.60) {
-            let safePointsToFeed = nonTrumps.filter(c => getCardPoints(c) <= 10);
-            if (safePointsToFeed.length > 0) return safePointsToFeed.sort((a, b) => getCardPoints(b) - getCardPoints(a))[0];
+            let safePointsToFeed = nonTrumps.filter(c => getCardPoints(c) > 0 && getCardPoints(c) <= 10 && !keepForHome(c));
+            if (safePointsToFeed.length > 0) {
+                return safePointsToFeed.sort((a, b) => {
+                    if (getCardPoints(a) !== getCardPoints(b)) return getCardPoints(b) - getCardPoints(a);
+                    return getCardRank(a) - getCardRank(b);
+                })[0];
+            }
 
             return nonTrumps.sort((a, b) => getCardPoints(a) - getCardPoints(b))[0];
         }
@@ -787,7 +839,7 @@ function unseenCardPool(state, excludeHand, numPlayersOverride) {
 //    run on every relevant turn without any risk of hitching the page.
 // ---------------------------------------------------------------------------------------
 
-const ENDGAME_SEARCH_MAX_HAND = 3;
+const ENDGAME_SEARCH_MAX_HAND = 6;
 const ENDGAME_SAMPLES = 8;
 
 function buildDeterminizedSimState(state, myId, voidMap) {
@@ -882,7 +934,7 @@ function getBestCardToPlayEndgame(playerId, state, legalCards) {
 // ---------------------------------------------------------------------------------------
 
 const BID_SIM_SAMPLES = 40;      // playouts per bid decision (~2ms each)
-const BID_RISK_LAMBDA = 0.62;   // std-devs below the expected score we bid (tuned via self-play sweep)
+const BID_RISK_LAMBDA = 0.60;   // std-devs below the expected score we bid (tuned via self-play sweep)
 const BID_MIN_SIGMA = 6;        // floor on the spread so a near-deterministic sim (2p) still gets a margin
 const TOTAL_POINTS = 250;
 

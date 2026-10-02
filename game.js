@@ -582,7 +582,7 @@ function checkTrumpSelectionTimeout() {
             cpuTrumpPlan = { playerId: bidderId, actAt: Date.now() + 1000 + Math.random() * 1500 };
         }
         if (Date.now() >= cpuTrumpPlan.actAt) {
-            const choice = getCpuTrumpChoice(bidder, gameState.players.length);
+            const choice = getCpuTrumpChoice(bidder, gameState.players.length, gameState.highestBid.amount);
             cpuTrumpPlan = null;
             handleSetTrump(bidderId, choice.suit, choice.calls);
             broadcastState();

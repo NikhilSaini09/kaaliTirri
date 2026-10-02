@@ -284,8 +284,15 @@ function attachHostConnectionHandler() {
 function updateRoomIdDisplay(id) {
     const display = document.getElementById('roomIdDisplay');
     if (!display) return;
+
+    const safeId = String(id)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
     
-    display.innerHTML = `Room ID: <b style="letter-spacing: 1px;">${id}</b> <button id="copyRoomIdBtn" style="margin-left: 12px; padding: 4px 10px; font-size: 12px;" class="btn-ghost" title="Copy Room ID"> 📋 </button>`;
+    display.innerHTML = `Room ID: <b style="letter-spacing: 1px;">${safeId}</b> <button id="copyRoomIdBtn" style="margin-left: 12px; padding: 4px 10px; font-size: 12px;" class="btn-ghost" title="Copy Room ID"> 📋 </button>`;
     
     const copyBtn = document.getElementById('copyRoomIdBtn');
     if (copyBtn) {

@@ -70,7 +70,6 @@ function syncTrickMemory(mem, state) {
     const n = players.length;
     if (!n) return mem;
 
-    // Has the table changed underneath us (new deal, loaded save, different players)?
     let stale = mem.ids.length !== n;
     for (let i = 0; !stale && i < n; i++) {
         const p = players[i];
@@ -116,8 +115,7 @@ function getTrickMemory(state) {
 }
 
 /**
- * Hook for game.js: call from evaluateTrick() BEFORE the trick is pushed onto the winner's
- * wonCards. Catches the memory up first, then records this trick in exact order.
+ * Hook for game.js: Catches the memory up first, then records this trick in exact order.
  */
 function cpuObserveTrick(state, trickCards, winnerId) {
     if (!trickCards || trickCards.length === 0) return;
@@ -221,7 +219,6 @@ function guessTeam(playerId, state, affinity, beliefs) {
     const p = state.players.find(pl => pl.id === playerId);
     if (!p) return 'UNKNOWN';
     if (p.team !== 'UNKNOWN') return p.team;
-    // Logical deduction beats the statistical affinity guess.
     if (beliefs && beliefs[playerId] && beliefs[playerId].team !== 'UNKNOWN') return beliefs[playerId].team;
     const score = affinity ? (affinity[playerId] || 0) : 0;
     if (score >= TEAM_AFFINITY_THRESHOLD) return 'BIDDER_TEAM';
@@ -235,8 +232,8 @@ function determineMyTeam(playerId, state) {
     if (player.team !== 'UNKNOWN') return player.team;
 
     const myCodes = new Set(player.hand.map(c => `${c.value}${c.suit}`));
-    const everCalled = (state.originalCalledCards && state.originalCalledCards.length > 0)
-        ? state.originalCalledCards
+    const everCalled = (state.calledCards && state.calledCards.length > 0)
+        ? state.calledCards
         : (state.calledCards || []);
     if (everCalled.length === 0) return 'DEFENDER_TEAM';
     return everCalled.some(code => myCodes.has(code)) ? 'BIDDER_TEAM' : 'DEFENDER_TEAM';
@@ -377,7 +374,6 @@ function getCtx(playerId, state) {
     return ctx;
 }
 
-// Team of a player if it is CERTAIN (revealed or deduced), else 'UNKNOWN'.
 function certainTeamOf(ctx, state, id) {
     if (id === ctx.playerId) return ctx.myTeam;
     const p = state.players.find(x => x.id === id);
@@ -410,8 +406,6 @@ function getMood(ctx, state) {
     }
     const remaining = totalAvail - all;
     if (remaining <= 0) return ctx.mood;
-    // Bidder wins with >= bid. Defenders win when the bidder ends below it, i.e. when they
-    // collect at least (total - bid + 5) (all point totals are multiples of 5).
     const need = ctx.myTeam === 'BIDDER_TEAM' ? ctx.bid - bPts : (totalAvail - ctx.bid + 5) - dPts;
     if (need <= 0 || need > remaining) return ctx.mood;
 
@@ -625,6 +619,155 @@ function getLegalCards(player, state) {
     return [...player.hand];
 }
 
+// ---------------------------------------------------------------------------------------
+// DETERMINISTIC TRUMP CONTROL
+//
+// If:
+//   - we are void in the current lead suit,
+//   - our teammate is currently winning,
+//   - the lead suit is not trump,
+//   - every opponent is PROVEN void in trump,
+//   - teams are fully known,
+//   - all remaining trumps therefore belong to our team,
+//   - and remaining trumps == remaining tricks,
+//
+// then every remaining trick can be secured by spending exactly one team trump per trick.
+// In this situation there is no reason to save the trump for later: doing so can allow a
+// teammate to lead trump later and force multiple team trumps onto the same trick.
+//
+// Play the cheapest available trump immediately.
+//
+// This is intentionally deterministic and only fires when every condition is certain.
+// ---------------------------------------------------------------------------------------
+
+function getDeterministicTrumpControlCard(playerId, state) {
+    if (!state || !state.board || state.board.length === 0) return null;
+    if (!state.trumpSuit) return null;
+
+    const player = state.players.find(p => p.id === playerId);
+    if (!player || player.hand.length === 0) return null;
+
+    const nPlayers = state.players.length;
+    if (nPlayers < 2) return null;
+
+    const leadSuit = state.board[0].suit;
+    const trump = state.trumpSuit;
+
+    // If trump itself is led, normal follow-suit rules already handle this case.
+    if (leadSuit === trump) return null;
+
+    // We must actually be void in the lead suit.
+    if (player.hand.some(c => c.suit === leadSuit)) return null;
+
+    // Determine the current trick winner using the exact same rules as the game.
+    let winner = state.board[0];
+
+    for (let i = 1; i < state.board.length; i++) {
+        const c = state.board[i];
+
+        const isTrump = c.suit === trump;
+        const winnerIsTrump = winner.suit === trump;
+
+        if (isTrump && !winnerIsTrump) {
+            winner = c;
+        } else if (
+            (isTrump && winnerIsTrump) ||
+            (!isTrump && !winnerIsTrump && c.suit === leadSuit)
+        ) {
+            if (getCardRank(c) > getCardRank(winner)) {
+                winner = c;
+            }
+        }
+    }
+
+    // The current winner must be a teammate whose team is known with certainty.
+    const myTeam = determineMyTeam(playerId, state);
+    if (myTeam !== 'BIDDER_TEAM' && myTeam !== 'DEFENDER_TEAM') return null;
+
+    const winnerPlayer = state.players.find(p => p.id === winner.playedBy);
+    if (!winnerPlayer) return null;
+
+    if (winnerPlayer.id === playerId) return null;
+    if (winnerPlayer.team !== myTeam) return null;
+
+    // All teams must be known. We do NOT use probabilistic team inference here.
+    if (state.players.some(p =>
+        p.id !== playerId &&
+        p.team !== 'BIDDER_TEAM' &&
+        p.team !== 'DEFENDER_TEAM'
+    )) {
+        return null;
+    }
+
+    // Obtain the public void map.
+    const voidMap = computeVoidMap(state);
+
+    // Every opponent must be PROVEN void in trump.
+    const opponents = state.players.filter(p => p.team !== myTeam);
+
+    if (opponents.length === 0) return null;
+
+    const allOpponentsVoidInTrump = opponents.every(p =>
+        voidMap[p.id] && voidMap[p.id].has(trump)
+    );
+
+    if (!allOpponentsVoidInTrump) return null;
+
+    // Count all remaining trumps.
+    // A card is no longer remaining if it was:
+    //   - evicted from the deal,
+    //   - played in a completed trick,
+    //   - or is currently on the board.
+    const mem = getTrickMemory(state);
+    const playedCodes = mem.played;
+    const boardCodes = new Set(state.board.map(cardCode));
+    const evictedCodes = getEvictedCardSet(nPlayers);
+
+    let remainingTrumpCount = 0;
+
+    for (const value of values) {
+        const code = `${value}${trump}`;
+
+        if (
+            evictedCodes.has(code) ||
+            playedCodes.has(code) ||
+            boardCodes.has(code)
+        ) {
+            continue;
+        }
+
+        remainingTrumpCount++;
+    }
+
+    // The player must actually have a trump to spend now.
+    const trumpsInHand = player.hand.filter(c => c.suit === trump);
+    if (trumpsInHand.length === 0) return null;
+
+    // Number of tricks still to be played, including the current incomplete trick.
+    //
+    // Every unplayed card is currently either:
+    //   - in someone's hand, or
+    //   - on the board.
+    //
+    // With evenly dealt hands, ceil(total cards still in hands / players) gives
+    // current trick + all future tricks.
+    const cardsStillInHands = state.players.reduce(
+        (total, p) => total + p.hand.length,
+        0
+    );
+
+    const remainingTricks = Math.ceil(cardsStillInHands / nPlayers);
+
+    // The key deterministic condition:
+    // exactly one team trump is available for every remaining trick.
+    if (remainingTrumpCount !== remainingTricks) return null;
+
+    // Spend the cheapest trump now.
+    trumpsInHand.sort((a, b) => getCardRank(a) - getCardRank(b));
+
+    return trumpsInHand[0];
+}
+
 // P(at least one of K "marked" cards is among h cards drawn from a pool of U).
 function probHoldsAny(h, U, K) {
     if (K <= 0 || h <= 0 || U <= 0) return 0;
@@ -635,7 +778,7 @@ function probHoldsAny(h, U, K) {
 }
 
 // Chance a given other player is on the OTHER team from `myTeam`.
-function makeEnemyProbFn(playerId, state, myTeam, voidMap) {
+function makeEnemyProbFn(playerId, state, myTeam) {
     const me = state.players.find(p => p.id === playerId);
     const ctx = getCtx(playerId, state);
     const affinity = ctx.affinity;
@@ -776,6 +919,9 @@ function getBestCardToPlay(playerId, state) {
     if (!player || player.hand.length === 0) return null;
     getTrickMemory(state);
 
+    const trumpControlCard = getDeterministicTrumpControlCard(playerId, state);
+    if (trumpControlCard) return trumpControlCard;
+
     if (player.hand.length <= ENDGAME_SEARCH_MAX_HAND && state.board.length < state.players.length) {
         try {
             const legal = getLegalCards(player, state);
@@ -796,6 +942,9 @@ function getBestCardToPlayInner(playerId, state) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
     getTrickMemory(state);
+
+    const trumpControlCard = getDeterministicTrumpControlCard(playerId, state);
+    if (trumpControlCard) return trumpControlCard;
 
     const legal = getLegalCards(player, state);
     if (legal.length === 1) return legal[0];
@@ -1165,9 +1314,13 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
                 const cheapTrump = getCardRank(cheapest) <= getCardRank({ value: '8' });
                 // Worth a trump? Rich tricks yes; a small trump for a small trick yes; never a big
                 // trump on a worthless trick.
-                const worth = trickPoints >= 10
-                    || (trickPoints >= 5 && (getCardPoints(cheapest) === 0 || bestProb >= 0.8))
-                    || (getCardPoints(cheapest) === 0 && cheapTrump && bestProb >= 0.8);
+                const pointsSaved = dump ? getCardPoints(dump) : 0;
+                const effectiveTrickPoints = trickPoints + pointsSaved;
+
+                const worth = effectiveTrickPoints >= 10
+                    || (effectiveTrickPoints >= 5 && (getCardPoints(cheapest) === 0 || bestProb >= 0.8))
+                    || (getCardPoints(cheapest) === 0 && cheapTrump && bestProb >= 0.8)
+                    || (bestProb > 0.95 && dump && getCardPoints(dump) > 0);
                 if (worth) {
                     if (AI_FLAGS.matePickup && !lastSeat && dump && trickPoints > 0) {
                         const pD = prob(dump);
@@ -1452,12 +1605,18 @@ function getCpuMaxBid(hand, numPlayers) {
     return Math.floor(ceiling / 5) * 5;
 }
 
+const evictedSetCache = {};
 function getEvictedCardSet(numPlayers) {
     if (!numPlayers || typeof EVICTION_ORDER === 'undefined') return new Set();
+    if (evictedSetCache[numPlayers]) {
+        return evictedSetCache[numPlayers];
+    }
     const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));
     const totalDealt = cardsPerPlayer * numPlayers;
     const toRemove = Math.max(0, 52 - totalDealt);
-    return new Set(EVICTION_ORDER.slice(0, toRemove));
+    const newSet = new Set(EVICTION_ORDER.slice(0, toRemove));
+    evictedSetCache[numPlayers] = newSet;
+    return newSet;
 }
 
 /**

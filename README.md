@@ -44,7 +44,7 @@ Max possible points = 30 \+ (5 \* 4) \+ (10 \* 5 \* 4) = 250 pts
 
 ### Distribution & Auction
 
-All 52 cards are distributed randomly and evenly to the active players; any remainder is discarded. Hands are automatically sorted by suit and rank for convenience.
+All 52 cards are distributed randomly and evenly to the active players; any remainder is discarded (lower value cards are discarded first). Hands are automatically sorted by suit and rank for convenience.
 
 After reviewing their cards, players begin the **Bidding Phase**. The minimum bid is 130 pts and the maximum is 250 pts.
 Whoever bids highest (or hits 250 first) is the "BID_WINNER". If the initial 30-second timer expires with no bids, a random player is forcefully assigned as the BID_WINNER with 130 pts.

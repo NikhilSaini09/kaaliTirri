@@ -13,23 +13,38 @@ function switchView(viewId) {
 let audioCtx = null;
 function getAudioCtx() {
     if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) {
+            console.warn('[ui] Web Audio is not supported in this browser; sounds are disabled.');
+            return null;
+        }
+        audioCtx = new Ctx();
     }
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx.state === 'suspended') {
+        const resumed = audioCtx.resume();
+        if (resumed && typeof resumed.catch === 'function') {
+            resumed.catch(e => console.warn('[ui] Could not resume the audio context (needs a user gesture?):', e));
+        }
+    }
     return audioCtx;
 }
 function playTone(freq, type, duration, vol) {
-    const ctx = getAudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, ctx.currentTime);
-    gain.gain.setValueAtTime(vol, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + duration);
+    try {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(vol, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + duration);
+    } catch (e) {
+        console.warn('[ui] Could not play a sound:', e);
+    }
 }
 function playCardSound() { playTone(250, 'triangle', 0.1, 0.4); }
 function playKaaliTirriSound() { playTone(300, 'sawtooth', 0.2, 0.5); setTimeout(() => playTone(600, 'square', 0.4, 0.4), 100); }
@@ -46,12 +61,16 @@ const PHASE_LABELS = {
 };
 
 function renderState() {
-    if (gameState.phase === 'LOBBY') {
-        switchView('view-lobby');
-        renderLobby();
-    } else {
-        switchView('view-game');
-        renderGameBoard();
+    try {
+        if (gameState.phase === 'LOBBY') {
+            switchView('view-lobby');
+            renderLobby();
+        } else {
+            switchView('view-game');
+            renderGameBoard();
+        }
+    } catch (e) {
+        console.error('[ui] renderState failed (phase=' + (gameState && gameState.phase) + '):', e);
     }
 }
 
@@ -148,7 +167,11 @@ function renderLobby() {
                 makeHost.title = `Make ${cleanPlayerName(member.name)} the host`;
                 makeHost.addEventListener('click', () => {
                     if (confirm(`Make ${cleanPlayerName(member.name)} the new host? You will become a regular player.`)) {
-                        promoteToHost(member.id);
+                        try {
+                            promoteToHost(member.id);
+                        } catch (e) {
+                            console.error('[ui] promoteToHost failed:', e);
+                        }
                     }
                 });
                 controls.appendChild(makeHost);
@@ -241,7 +264,7 @@ function stopTimerBarLoop() {
 }
 
 function cleanPlayerName(name) {
-    return name.replace(' (Host)', ' (H)').replace(' (Spectator)', ' (S)');
+    return String(name == null ? '' : name).replace(' (Host)', ' (H)').replace(' (Spectator)', ' (S)');
 }
 
 function escapeHtml(str) {
@@ -277,7 +300,7 @@ function renderGameBoard() {
     const timerWrap = document.getElementById('timer-bar-wrap');
     const foldBanner = document.getElementById('fold-banner');
 
-    document.getElementById('phase-display').innerHTML = `Phase: <span class="phase-label">${PHASE_LABELS[gameState.phase] || gameState.phase}</span>`;
+    document.getElementById('phase-display').innerHTML = `Phase: <span class="phase-label">${escapeHtml(PHASE_LABELS[gameState.phase] || gameState.phase)}</span>`;
     hostControls.style.display = isHost ? 'block' : 'none';
 
     const pauseOverlay = document.getElementById('pause-overlay');
@@ -486,9 +509,9 @@ function renderGameBoard() {
         let pileHtml = '';
         if (player.wonCards && player.wonCards.length > 0) {
             pileHtml = isMobile
-                ? `<div class="won-pile-btn" title="Click to view won cards"><span>${player.wonCards.length}</span></div>`
+                ? `<div class="won-pile-btn" title="Click to view won cards"><span>${escapeHtml(player.wonCards.length)}</span></div>`
                 : ` <div class="won-pile-btn" title="Click to view won cards">
-                        <span>${player.wonCards.length}</span>
+                        <span>${escapeHtml(player.wonCards.length)}</span>
                     </div>`
             ;
         }
@@ -498,7 +521,7 @@ function renderGameBoard() {
 
         oppDiv.innerHTML = `
             <span class="opp-name">${isActiveTurn ? '<span class="turn-dot"></span>' : ''}${teamIcon}${escapeHtml(cleanName)}</span>
-            <span class="opp-meta">${player.hand.length} C &middot; ${player.points} Pts</span>
+            <span class="opp-meta">${escapeHtml(player.hand.length)} C &middot; ${escapeHtml(player.points)} Pts</span>
             ${fanHtml}
             ${isFolded ? '<span class="fold-tag">FOLDED</span>' : ''}
             ${pileHtml}
@@ -522,17 +545,17 @@ function renderGameBoard() {
     if (gameState.phase !== 'LOBBY') {
         gameInfo.style.display = 'inline-flex';
         if (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION') {
-            document.getElementById('bid-info').innerHTML = `High Bid: <b>${gameState.highestBid.amount || '—'}</b> (${gameState.highestBid.playerName ? escapeHtml(cleanPlayerName(gameState.highestBid.playerName)) : 'None yet'})`;
+            document.getElementById('bid-info').innerHTML = `High Bid: <b>${escapeHtml(gameState.highestBid.amount || '—')}</b> (${gameState.highestBid.playerName ? escapeHtml(cleanPlayerName(gameState.highestBid.playerName)) : 'None yet'})`;
             document.getElementById('trump-info').innerHTML = '';
         } else {
-            document.getElementById('bid-info').innerHTML = `Target: <b>${gameState.highestBid.amount}</b> (${escapeHtml(cleanPlayerName(gameState.highestBid.playerName))})`;
+            document.getElementById('bid-info').innerHTML = `Target: <b>${escapeHtml(gameState.highestBid.amount)}</b> (${escapeHtml(cleanPlayerName(gameState.highestBid.playerName))})`;
             const trumpColor = (gameState.trumpSuit === '♥' || gameState.trumpSuit === '♦') ? 'red' : 'black';
-            let trumpHtml = `Trump: <span class="trump-suit-display ${trumpColor}">${gameState.trumpSuit}</span>`;
+            let trumpHtml = `Trump: <span class="trump-suit-display ${trumpColor}">${escapeHtml(gameState.trumpSuit)}</span>`;
             if (gameState.originalCalledCards && gameState.originalCalledCards.length > 0) {
                 const partnerHtml = gameState.originalCalledCards.map(c => {
                     const suit = c.slice(-1);
                     const cls = (suit === '♥' || suit === '♦') ? 'red' : 'black';
-                    return `<b class="${cls}">${c}</b>`;
+                    return `<b class="${cls}">${escapeHtml(c)}</b>`;
                 }).join(', ');
                 trumpHtml += ` &middot; Partner: ${partnerHtml}`;
             }
@@ -619,7 +642,7 @@ function renderGameBoard() {
             myPileDiv.className = 'my-won-pile';
             myPileDiv.title = "Click to view your won cards";
             myPileDiv.innerHTML = `
-                <span>${me.wonCards.length} (${me.points} pts)</span>
+                <span>${escapeHtml(me.wonCards.length)} (${escapeHtml(me.points)} pts)</span>
             `;
             myPileDiv.addEventListener('click', () => openWonCardsModal(me));
             statusRow.appendChild(myPileDiv);
@@ -720,14 +743,14 @@ function renderGameBoard() {
 
         gameState.players.forEach(p => {
             const clean = escapeHtml(cleanPlayerName(p.name));
-            const stats = gameStats[clean.replace(" (H)", "")] || { wins: 0, gamesPlayed: 0, winRate: '0.0%' };
-            const statLine = `<span style="font-size: 11px; opacity: 0.8; display: block;">Career: ${stats.wins}W / ${stats.gamesPlayed - stats.wins}L (${stats.winRate})</span>`;
+            const stats = gameStats[statsKeyFor(p.name)] || { wins: 0, gamesPlayed: 0, winRate: '0.0%' };
+            const statLine = `<span style="font-size: 11px; opacity: 0.8; display: block;">Career: ${escapeHtml(stats.wins)}W / ${escapeHtml(stats.gamesPlayed - stats.wins)}L (${escapeHtml(stats.winRate)})</span>`;
             
             if (p.team === 'BIDDER_TEAM') {
-                bTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${p.points} pts</b>${statLine}</div>`;
+                bTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${escapeHtml(p.points)} pts</b>${statLine}</div>`;
                 bTotal += p.points;
             } else {
-                dTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${p.points} pts</b>${statLine}</div>`;
+                dTeamHtml += `<div style="margin-bottom: 6px;">${clean}: <b>${escapeHtml(p.points)} pts</b>${statLine}</div>`;
                 dTotal += p.points;
             }
         });
@@ -766,7 +789,13 @@ function getCurrentWinningCard(board, trumpSuit) {
 function createCardElement(card, isClickable, isPlayable = true) {
     const cardEl = document.createElement('div');
     cardEl.className = `card ${card.suit === '♥' || card.suit === '♦' ? 'red' : 'black'}`;
-    cardEl.innerHTML = `<span class="card-rank">${card.value}</span><span class="card-suit">${card.suit}</span>`;
+    const rankEl = document.createElement('span');
+    rankEl.className = 'card-rank';
+    rankEl.textContent = card.value;
+    const suitEl = document.createElement('span');
+    suitEl.className = 'card-suit';
+    suitEl.textContent = card.suit;
+    cardEl.append(rankEl, suitEl);
 
     if (isClickable && !isPlayable) {
         cardEl.style.opacity = '0.5';
@@ -775,166 +804,236 @@ function createCardElement(card, isClickable, isPlayable = true) {
     return cardEl;
 }
 
+function guarded(name, fn) {
+    return function (...args) {
+        try {
+            return fn.apply(this, args);
+        } catch (e) {
+            console.error('[ui] ' + name + ' failed:', e);
+        }
+    };
+}
+
+function sendToHost(message) {
+    try {
+        if (!hostConnection || !hostConnection.open) {
+            console.warn('[ui] Cannot send ' + message.type + ': not connected to the host.');
+            alert('You are not connected to the host right now. Please wait a moment and try again.');
+            return false;
+        }
+        hostConnection.send(message);
+        return true;
+    } catch (e) {
+        console.error('[ui] Failed to send ' + message.type + ' to the host:', e);
+        alert('Could not reach the host. Please try again.');
+        return false;
+    }
+}
+
 function requestPlayCard(card) {
-    if (!isCardPlayable(myPeerId, card)) { alert("You cannot play this card."); return; }
-    if (isHost) { handlePlayCard(myPeerId, card); broadcastState(); }
-    else if (hostConnection) hostConnection.send({ type: 'ACTION_PLAY_CARD', card: card });
+    try {
+        if (!isCardPlayable(myPeerId, card)) { alert("You cannot play this card."); return; }
+        if (isHost) { handlePlayCard(myPeerId, card); broadcastState(); }
+        else sendToHost({ type: 'ACTION_PLAY_CARD', card: card });
+    } catch (e) {
+        console.error('[ui] requestPlayCard failed:', e);
+    }
 }
 
 function normalizeName(name) {
     if (!name) return "";
-    return name.replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '').trim();
+    return String(name).replace(/\s*\((Host|H|Spectator|S)\)\s*/gi, '').trim();
 }
 
 function saveGame() {
-    if (gameState.phase === 'TRICK_EVALUATION') {
-        if (trickEvalTimeout) {
-            clearTimeout(trickEvalTimeout);
-            trickEvalTimeout = null;
+    try {
+        if (gameState.phase === 'TRICK_EVALUATION') {
+            if (trickEvalTimeout) {
+                clearTimeout(trickEvalTimeout);
+                trickEvalTimeout = null;
+            }
+            evaluateTrick();
+            broadcastState();
         }
-        evaluateTrick();
-        broadcastState();
+
+        const payload = {
+            gameState: gameState,
+            gameStats: gameStats,
+            playerData: playerData
+        };
+
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        const linkElement = document.createElement('a');
+        linkElement.href = url;
+        linkElement.download = `kaali_tirri_save_${Date.now()}.json`;
+        document.body.appendChild(linkElement);
+        linkElement.click();
+        linkElement.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+        console.error('[ui] saveGame failed:', e);
+        alert("Could not save the game. See the browser console for details.");
     }
-
-    const payload = {
-        gameState: gameState,
-        gameStats: gameStats,
-        playerData: playerData
-    };
-
-    const dataStr = JSON.stringify(payload, null, 2);
-    const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
-
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', `kaali_tirri_save_${Date.now()}.json`);
-    linkElement.click();
 }
 
 function loadGame(event) {
+    const input = event.target;
     if (!isHost) {
         alert("Only the room host can load save files.");
+        input.value = '';
         return;
     }
 
-    if (trickEvalTimeout) {
-        clearTimeout(trickEvalTimeout);
-        trickEvalTimeout = null;
-    }
-
-    const file = event.target.files[0];
+    const file = input.files && input.files[0];
     if (!file) return;
+    input.value = '';
 
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onerror = function () {
+        console.error('[ui] Could not read the save file:', reader.error);
+        alert("Could not read that file.");
+    };
+    reader.onload = function (e) {
         try {
             const parsed = JSON.parse(e.target.result);
 
-            if (parsed.gameState) {
-                playerData = parsed.playerData || [];
-                
-                let allCurrentUsers = [];
-                gameState.players.forEach(p => { if (!p.isCPU && !isDisconnected(p.id)) allCurrentUsers.push({ id: p.id, name: p.name }); });
-                (gameState.spectators || []).forEach(s => { if (!s.isCPU && !isDisconnected(s.id)) allCurrentUsers.push({ id: s.id, name: s.name }); });
-                
-                let uniqueUsers = Array.from(new Map(allCurrentUsers.map(item => [item.id, item])).values());
-                let currentPool = [...uniqueUsers];
-                let leftoverSpectators = [];
-                let idMap = {};
-                
-                let newPlayers = new Array(parsed.gameState.players.length).fill(null);
-
-                parsed.gameState.players.forEach((savedPlayer, index) => {
-                    if (savedPlayer.isCPU) newPlayers[index] = savedPlayer;
-                });
-
-                // PASS 1: Robust normalized name matching
-                parsed.gameState.players.forEach((savedPlayer, index) => {
-                    if (newPlayers[index]) return;
-                    const matchIndex = currentPool.findIndex(p => normalizeName(p.name) === normalizeName(savedPlayer.name));
-                    if (matchIndex !== -1) {
-                        const matchedConn = currentPool.splice(matchIndex, 1)[0];
-                        idMap[savedPlayer.id] = matchedConn.id;
-                        savedPlayer.id = matchedConn.id;
-                        newPlayers[index] = savedPlayer;
-                    }
-                });
-
-                // PASS 2: Map unassigned seats
-                parsed.gameState.players.forEach((savedPlayer, index) => {
-                    if (!newPlayers[index]) {
-                        if (currentPool.length > 0) {
-                            const matchedConn = currentPool.shift();
-                            idMap[savedPlayer.id] = matchedConn.id;
-                            savedPlayer.id = matchedConn.id;
-                            savedPlayer.name = matchedConn.name;
-                            newPlayers[index] = savedPlayer;
-                        }
-                    }
-                });
-
-                newPlayers = newPlayers.filter(p => p !== null);
-
-                // PASS 3: Remaining connected users become spectators
-                currentPool.forEach(conn => {
-                    leftoverSpectators.push({ id: conn.id, name: conn.name + " (Spectator)" });
-                });
-
-                parsed.gameState.players = newPlayers;
-                parsed.gameState.spectators = leftoverSpectators;
-
-                if (parsed.gameState.lobbyOrder) {
-                    let newLobbyOrder = [];
-                    parsed.gameState.lobbyOrder.forEach(oldId => {
-                        if (idMap[oldId]) newLobbyOrder.push(idMap[oldId]);
-                    });
-                    leftoverSpectators.forEach(s => newLobbyOrder.push(s.id));
-                    parsed.gameState.lobbyOrder = newLobbyOrder;
-                }
-
-                if (parsed.gameState.highestBid && idMap[parsed.gameState.highestBid.playerId]) {
-                    parsed.gameState.highestBid.playerId = idMap[parsed.gameState.highestBid.playerId];
-                    const bidder = newPlayers.find(p => p.id === parsed.gameState.highestBid.playerId);
-                    if (bidder) parsed.gameState.highestBid.playerName = bidder.name;
-                } else if (parsed.gameState.highestBid) {
-                    parsed.gameState.highestBid.playerId = null;
-                }
-
-                parsed.gameState.board.forEach(card => {
-                    if (idMap[card.playedBy]) card.playedBy = idMap[card.playedBy];
-                });
-
-                if (parsed.gameState.turnIndex >= newPlayers.length) {
-                    parsed.gameState.turnIndex = 0; 
-                }
-
-                // Reset and Auto-Pause
-                parsed.gameState.isPaused = true;
-                parsed.gameState.pausedRemaining = 30000;
-                parsed.gameState.biddingDeadline = null;
-                parsed.gameState.turnDeadline = null;
-                parsed.gameState.trumpSelectionDeadline = null;
-
-                parsed.gameState.excludedIds = [];
-                parsed.gameState.disconnectedIds = [];
-                parsed.gameState.disconnectedAt = {};
-
-                gameState = parsed.gameState;
-                gameStats = parsed.gameStats || {};
-
-                if (typeof startGameLoops === 'function') startGameLoops();
-
-                broadcastState();
-            } else {
+            if (!parsed || typeof parsed !== 'object' || !parsed.gameState || !Array.isArray(parsed.gameState.players)) {
                 throw new Error("Invalid structure");
             }
-        } catch(err) {
+            const saved = parsed.gameState;
+            saved.board = Array.isArray(saved.board) ? saved.board : [];
+            saved.players.forEach(p => {
+                p.hand = Array.isArray(p.hand) ? p.hand : [];
+                p.wonCards = Array.isArray(p.wonCards) ? p.wonCards : [];
+            });
+
+            const loadedPlayerData = Array.isArray(parsed.playerData) ? parsed.playerData : [];
+
+            let allCurrentUsers = [];
+            gameState.players.forEach(p => { if (!p.isCPU && !isDisconnected(p.id)) allCurrentUsers.push({ id: p.id, name: p.name }); });
+            (gameState.spectators || []).forEach(s => { if (!s.isCPU && !isDisconnected(s.id)) allCurrentUsers.push({ id: s.id, name: s.name }); });
+
+            let uniqueUsers = Array.from(new Map(allCurrentUsers.map(item => [item.id, item])).values());
+            let currentPool = [...uniqueUsers];
+            let leftoverSpectators = [];
+            let idMap = {};
+
+            let newPlayers = new Array(saved.players.length).fill(null);
+
+            // CPU seats keep their ids; they must stay mapped so the bidder, board and lobby order still line up.
+            saved.players.forEach((savedPlayer, index) => {
+                if (savedPlayer.isCPU) {
+                    idMap[savedPlayer.id] = savedPlayer.id;
+                    newPlayers[index] = savedPlayer;
+                }
+            });
+
+            // PASS 1: Robust normalized name matching (adopt the live name so "(Host)" tags stay correct)
+            saved.players.forEach((savedPlayer, index) => {
+                if (newPlayers[index]) return;
+                const matchIndex = currentPool.findIndex(p => normalizeName(p.name) === normalizeName(savedPlayer.name));
+                if (matchIndex !== -1) {
+                    const matchedConn = currentPool.splice(matchIndex, 1)[0];
+                    idMap[savedPlayer.id] = matchedConn.id;
+                    savedPlayer.id = matchedConn.id;
+                    savedPlayer.name = matchedConn.name;
+                    newPlayers[index] = savedPlayer;
+                }
+            });
+
+            // PASS 2: Map unassigned seats
+            saved.players.forEach((savedPlayer, index) => {
+                if (!newPlayers[index]) {
+                    if (currentPool.length > 0) {
+                        const matchedConn = currentPool.shift();
+                        idMap[savedPlayer.id] = matchedConn.id;
+                        savedPlayer.id = matchedConn.id;
+                        savedPlayer.name = matchedConn.name;
+                        newPlayers[index] = savedPlayer;
+                    }
+                }
+            });
+
+            newPlayers = newPlayers.filter(p => p !== null);
+
+            // A hand that is mid-play cannot continue with missing seats (their cards and turns would vanish).
+            const midGame = saved.phase !== 'LOBBY' && saved.phase !== 'GAMEOVER';
+            if (midGame && newPlayers.length < saved.players.length) {
+                alert(`This save has ${saved.players.length} seats but only ${newPlayers.length} players are connected. Ask the missing players to join (or add bots) and load it again.`);
+                return;
+            }
+
+            // PASS 3: Remaining connected users become spectators
+            currentPool.forEach(conn => {
+                leftoverSpectators.push({ id: conn.id, name: normalizeName(conn.name) + " (Spectator)" });
+            });
+
+            saved.players = newPlayers;
+            saved.spectators = leftoverSpectators;
+
+            if (saved.lobbyOrder) {
+                let newLobbyOrder = [];
+                saved.lobbyOrder.forEach(oldId => {
+                    if (idMap[oldId]) newLobbyOrder.push(idMap[oldId]);
+                });
+                leftoverSpectators.forEach(sp => newLobbyOrder.push(sp.id));
+                saved.lobbyOrder = newLobbyOrder;
+            }
+
+            if (saved.highestBid && idMap[saved.highestBid.playerId]) {
+                saved.highestBid.playerId = idMap[saved.highestBid.playerId];
+                const bidder = newPlayers.find(p => p.id === saved.highestBid.playerId);
+                if (bidder) saved.highestBid.playerName = bidder.name;
+            } else if (saved.highestBid) {
+                saved.highestBid.playerId = null;
+            }
+
+            saved.board.forEach(card => {
+                if (idMap[card.playedBy]) card.playedBy = idMap[card.playedBy];
+            });
+            // Won cards remember who played them too (the CPU's trick memory relies on it).
+            newPlayers.forEach(p => p.wonCards.forEach(card => {
+                if (idMap[card.playedBy]) card.playedBy = idMap[card.playedBy];
+            }));
+
+            if (!(saved.turnIndex >= 0 && saved.turnIndex < newPlayers.length)) {
+                saved.turnIndex = 0;
+            }
+
+            // Reset and Auto-Pause (a finished hand / lobby has nothing to pause)
+            saved.isPaused = midGame;
+            saved.pausedRemaining = midGame ? 30000 : null;
+            saved.biddingDeadline = null;
+            saved.turnDeadline = null;
+            saved.trumpSelectionDeadline = null;
+
+            saved.excludedIds = [];
+            saved.disconnectedIds = [];
+            saved.disconnectedAt = {};
+
+            // Everything validated: only now is it safe to replace the live game.
+            if (trickEvalTimeout) {
+                clearTimeout(trickEvalTimeout);
+                trickEvalTimeout = null;
+            }
+            playerData = loadedPlayerData;
+            gameState = saved;
+            gameStats = toStatsMap(parsed.gameStats);
+            cpuBidPlans = {};
+            cpuTrumpPlan = null;
+            cpuMovePlan = null;
+
+            if (typeof startGameLoops === 'function') startGameLoops();
+
+            broadcastState();
+        } catch (err) {
+            console.error('[ui] loadGame failed:', err);
             alert("Failed to parse the save file.");
-            console.error(err);
         }
     };
     reader.readAsText(file);
-    event.target.value = '';
 }
 
 function openWonCardsModal(player) {
@@ -960,12 +1059,12 @@ function openWonCardsModal(player) {
 }
 
 // UI Bindings
-document.getElementById('addCpuBtn')?.addEventListener('click', () => {
+document.getElementById('addCpuBtn')?.addEventListener('click', guarded('addCpuPlayer', () => {
     if (!isHost) return;
     addCpuPlayer();
-});
+}));
 
-document.getElementById('startGameBtn').addEventListener('click', () => {
+document.getElementById('startGameBtn').addEventListener('click', guarded('startGame', () => {
     if (!isHost) return;
     if (!applySeatSelection()) {
         alert(`Tick at least ${MIN_PLAYERS} players to start.`);
@@ -976,9 +1075,9 @@ document.getElementById('startGameBtn').addEventListener('click', () => {
 
     startDeal();
     broadcastState();
-});
+}));
 
-document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
+document.getElementById('modalBackToLobbyBtn').addEventListener('click', guarded('returnToLobby', () => {
     if (isHost) {
         if (typeof trickEvalTimeout !== 'undefined' && trickEvalTimeout) {
             clearTimeout(trickEvalTimeout);
@@ -1000,6 +1099,7 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
             p.team = 'UNKNOWN';
         });
 
+        gameState.deck = [];
         gameState.board = [];
         gameState.highestBid = { playerId: null, amount: 0, playerName: "" };
         gameState.trumpSuit = null;
@@ -1007,57 +1107,73 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', () => {
         gameState.originalCalledCards = [];
         gameState.biddingDeadline = null;
         gameState.turnDeadline = null;
+        gameState.trumpSelectionDeadline = null;
         gameState.isPaused = false;
         gameState.pausedRemaining = null;
 
+        cpuBidPlans = {};
+        cpuTrumpPlan = null;
+        cpuMovePlan = null;
+
         broadcastState();
     }
-});
+}));
 
 document.getElementById('bidAmount').addEventListener('input', () => {
     bidAmountEditedByUser = true;
 });
 
-document.getElementById('submitBidBtn').addEventListener('click', () => {
+function validateBidInput(raw) {
+    const amt = Number(raw);
+    if (!Number.isInteger(amt) || amt % 5 !== 0) return "Bid must be a whole number, a multiple of 5.";
+    if (amt < MIN_BID || amt > MAX_BID) return `Bid must be between ${MIN_BID} and ${MAX_BID}.`;
+    if (gameState.highestBid.playerId === myPeerId) return "You already hold the highest bid.";
+    if (amt <= gameState.highestBid.amount) return `Bid must be higher than the current highest bid (${gameState.highestBid.amount}).`;
+    return null;
+}
+
+document.getElementById('submitBidBtn').addEventListener('click', guarded('submitBid', () => {
     const bidInput = document.getElementById('bidAmount');
     const bid = bidInput.value;
 
     if (!bid || bid === "") return;
 
-    if (isHost) { 
-        const res = handlePlaceBid(myPeerId, bid); 
+    const problem = validateBidInput(bid);
+    if (problem) { alert(problem); return; }
+
+    if (isHost) {
+        const res = handlePlaceBid(myPeerId, bid);
         if (res && res.error) {
             alert(res.error);
         } else {
             bidAmountEditedByUser = false;
-            broadcastState(); 
+            broadcastState();
         }
     }
-    else if (hostConnection) {
+    else if (sendToHost({ type: 'ACTION_PLACE_BID', amount: bid })) {
         bidAmountEditedByUser = false;
-        hostConnection.send({ type: 'ACTION_PLACE_BID', amount: bid });
     }
-});
+}));
 
-document.getElementById('foldBtn').addEventListener('click', () => {
+document.getElementById('foldBtn').addEventListener('click', guarded('fold', () => {
     if (gameState.highestBid.playerId === myPeerId) { alert("You have the highest bid, you cannot fold!"); return; }
     if (isHost) { handleFold(myPeerId); broadcastState(); }
-    else if (hostConnection) hostConnection.send({ type: 'ACTION_FOLD' });
-});
+    else sendToHost({ type: 'ACTION_FOLD' });
+}));
 
-document.getElementById('setTrumpBtn').addEventListener('click', () => {
+document.getElementById('setTrumpBtn').addEventListener('click', guarded('setTrump', () => {
     const suit = document.getElementById('trumpSuitSelect').value;
     const ranks = document.querySelectorAll('.team-rank-select');
-    const suits = document.querySelectorAll('.team-suit-select');
+    const suitSelects = document.querySelectorAll('.team-suit-select');
     let chosenCards = [];
 
-    for (let i = 0; i < ranks.length; i++) {
-        chosenCards.push(`${ranks[i].value}${suits[i].value}`);
+    for (let i = 0; i < ranks.length && i < suitSelects.length; i++) {
+        chosenCards.push(`${ranks[i].value}${suitSelects[i].value}`);
     }
 
     if (isHost) { handleSetTrump(myPeerId, suit, chosenCards); broadcastState(); }
-    else if (hostConnection) hostConnection.send({ type: 'ACTION_SET_TRUMP', suit: suit, cards: chosenCards });
-});
+    else sendToHost({ type: 'ACTION_SET_TRUMP', suit: suit, cards: chosenCards });
+}));
 
 function closeWonCardsModal() {
     document.getElementById('won-cards-modal').style.display = 'none';
@@ -1095,32 +1211,38 @@ document.addEventListener('click', (e) => {
     if (wrapper && !wrapper.contains(e.target)) closeHostMenu();
 });
 
-document.getElementById('hostReshuffleBtn')?.addEventListener('click', () => {
-    if(isHost) { startDeal(); broadcastState(); }
+document.getElementById('hostReshuffleBtn')?.addEventListener('click', guarded('reDeal', () => {
+    if (isHost) { startDeal(); broadcastState(); }
     closeHostMenu();
-});
-document.getElementById('hostPauseBtn')?.addEventListener('click', () => {
+}));
+document.getElementById('hostPauseBtn')?.addEventListener('click', guarded('togglePause', () => {
     if (isHost) { togglePause(); }
     closeHostMenu();
-});
-document.getElementById('resumeFromOverlayBtn')?.addEventListener('click', () => {
+}));
+document.getElementById('resumeFromOverlayBtn')?.addEventListener('click', guarded('resumeGame', () => {
     if (isHost) { togglePause(); }
-});
-document.getElementById('hostBackToLobbyBtn')?.addEventListener('click', () => {
-    if(isHost) { document.getElementById('modalBackToLobbyBtn').click(); }
+}));
+document.getElementById('hostBackToLobbyBtn')?.addEventListener('click', guarded('hostReturnToLobby', () => {
+    if (isHost) { document.getElementById('modalBackToLobbyBtn').click(); }
     closeHostMenu();
-});
+}));
 
 document.getElementById('saveBtn')?.addEventListener('click', saveGame);
-document.getElementById('loadInput')?.addEventListener('change', loadGame);
+document.getElementById('loadInput')?.addEventListener('change', guarded('loadGame', loadGame));
 document.getElementById('hostSaveBtn')?.addEventListener('click', () => { saveGame(); closeHostMenu(); });
-document.getElementById('hostLoadInput')?.addEventListener('change', (e) => { loadGame(e); closeHostMenu(); });
+document.getElementById('hostLoadInput')?.addEventListener('change', guarded('loadGame', (e) => { loadGame(e); closeHostMenu(); }));
 
 let lastIsMobile = window.innerWidth <= 860;
 window.addEventListener('resize', () => {
     const nowMobile = window.innerWidth <= 860;
     if (nowMobile !== lastIsMobile) {
         lastIsMobile = nowMobile;
-        if (gameState.phase !== 'LOBBY' && document.getElementById('view-game').style.display !== 'none') renderGameBoard();
+        if (gameState.phase !== 'LOBBY' && document.getElementById('view-game').style.display !== 'none') {
+            try {
+                renderGameBoard();
+            } catch (e) {
+                console.error('[ui] renderGameBoard failed on resize:', e);
+            }
+        }
     }
 });

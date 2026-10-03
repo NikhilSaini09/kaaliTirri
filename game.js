@@ -25,7 +25,7 @@ const MAX_BID = 250;
 const BIDDING_TIME_MS = 30000;
 const TRUMP_SELECTION_TIME_MS = 60000;
 const TURN_TIME_MS = 30000;
-const RECONNECT_GRACE_MS = 5000;
+const RECONNECT_GRACE_MS = 10000;
 
 let gameState = {
     phase: 'LOBBY',       // LOBBY, BIDDING, TRUMP_SELECTION, PLAYING, TRICK_EVALUATION, GAMEOVER
@@ -50,10 +50,39 @@ let gameState = {
     pausedRemaining: null
 };
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
-let gameStats = {};
+function toStatsMap(obj) {
+    const m = Object.create(null);
+    if (obj && typeof obj === 'object') {
+        for (const k of Object.keys(obj)) m[k] = obj[k];
+    }
+    return m;
+}
+
+function statsForWire() {
+    try {
+        return JSON.parse(JSON.stringify(gameStats));
+    } catch (e) {
+        console.error('[game] statsForWire failed, sending empty stats:', e);
+        return {};
+    }
+}
+let gameStats = toStatsMap();
 let playerData = [];
 
+function statsKeyFor(name) {
+    return String(name || '').replace(" (Host)", "").replace(" (H)", "").trim();
+}
+
 const MIN_PLAYERS = 2;
+const MAX_NAME_LENGTH = 15;
+const MAX_LOBBY_MEMBERS = 30;
+
+function sanitizeName(raw) {
+    if (typeof raw !== 'string') return '';
+    let s = raw.split(/[(\[{<)\]}>]/)[0];
+    s = s.replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
+    return s.slice(0, MAX_NAME_LENGTH).trim();
+}
 
 function stripSpectatorTag(name) {
     return name.replace(' (Spectator)', '');
@@ -169,6 +198,20 @@ function isCardPlayable(playerId, card) {
 }
 
 let trickEvalTimeout = null;
+function scheduleTrickEvaluation(delayMs) {
+    if (trickEvalTimeout) clearTimeout(trickEvalTimeout);
+    trickEvalTimeout = setTimeout(() => {
+        trickEvalTimeout = null;
+        try {
+            if (gameState.phase !== 'TRICK_EVALUATION') return;
+            if (gameState.isPaused) return;
+            evaluateTrick();
+            broadcastState();
+        } catch (e) {
+            console.error('[game] Trick evaluation failed:', e);
+        }
+    }, delayMs);
+}
 function handlePlayCard(playerId, playedCard) {
     if (gameState.isPaused) return;
     if (!playedCard || !playedCard.id) return;
@@ -204,10 +247,7 @@ function handlePlayCard(playerId, playedCard) {
     if (gameState.board.length === gameState.players.length) {
         gameState.phase = 'TRICK_EVALUATION';
         gameState.turnDeadline = null;
-        trickEvalTimeout = setTimeout(() => {
-            evaluateTrick();
-            broadcastState();
-        }, 2000);
+        scheduleTrickEvaluation(2000);
     } else {
         gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
         resetTurnTimer();
@@ -215,7 +255,11 @@ function handlePlayCard(playerId, playedCard) {
 }
 
 function evaluateTrick() {
-    if(gameState.board.length === 0) return;
+    if (!isHost) return;
+    if (gameState.board.length === 0 || gameState.players.length === 0) {
+        console.warn('[game] evaluateTrick called with an empty board or no players; ignoring.');
+        return;
+    }
     const leadSuit = gameState.board[0].suit;
     let winningCard = gameState.board[0];
 
@@ -236,7 +280,12 @@ function evaluateTrick() {
     if (gameState.players.some(p => p.isCPU) && typeof cpuObserveTrick === 'function') cpuObserveTrick(gameState, gameState.board, winningCard.playedBy);
     const trickPoints = gameState.board.reduce((sum, c) => sum + getCardPoints(c), 0);
     const winnerIndex = gameState.players.findIndex(p => p.id === winningCard.playedBy);
-    
+    if (winnerIndex === -1) {
+        console.error('[game] Trick winner is not a seated player (playedBy=' + winningCard.playedBy + '); re-dealing.');
+        startDeal();
+        return;
+    }
+
     gameState.players[winnerIndex].points += trickPoints;
     gameState.players[winnerIndex].wonCards.push(...gameState.board); 
 
@@ -248,7 +297,12 @@ function evaluateTrick() {
         evaluateRoundEnd();
     } else {
         gameState.phase = 'PLAYING';
-        resetTurnTimer();
+        if (gameState.isPaused) {
+            gameState.turnDeadline = null;
+            gameState.pausedRemaining = TURN_TIME_MS;
+        } else {
+            resetTurnTimer();
+        }
     }
 }
 
@@ -268,7 +322,7 @@ function evaluateRoundEnd() {
 
     gameState.players.forEach(p => {
         if(p.name.includes("(Spectator)")) return;
-        const cleanName = p.name.replace(" (Host)", "").replace(" (H)", "").trim();
+        const cleanName = statsKeyFor(p.name);
         
         if (!gameStats[cleanName]) {
             gameStats[cleanName] = { gamesPlayed: 0, wins: 0, losses: 0 };
@@ -308,7 +362,10 @@ function startDeal() {
     shuffle(fullDeck);
 
     const numPlayers = gameState.players.length;
-    if(numPlayers === 0) return;
+    if (numPlayers === 0) {
+        console.warn('[game] startDeal called with no seated players; ignoring.');
+        return;
+    }
 
     const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));
     const totalCardsToDeal = cardsPerPlayer * numPlayers;
@@ -367,9 +424,9 @@ function handlePlaceBid(playerId, amount) {
     const player = gameState.players.find(p => p.id === playerId);
     if (!player || player.hasFolded) return { error: "You have already folded." };
 
-    const amt = parseInt(amount);
-    if (isNaN(amt) || amt % 5 !== 0) {
-        return { error: "Bid must be a multiple of 5." };
+    const amt = Number(amount);
+    if (!Number.isInteger(amt) || amt % 5 !== 0) {
+        return { error: "Bid must be a whole number, a multiple of 5." };
     }
     if (amt < MIN_BID || amt > MAX_BID) {
         return { error: `Bid must be between ${MIN_BID} and ${MAX_BID}.` };
@@ -394,7 +451,11 @@ function handleFold(playerId) {
     if (gameState.highestBid.playerId === playerId) return;
 
     const player = gameState.players.find(p => p.id === playerId);
-    if (player) player.hasFolded = true;
+    if (!player) {
+        console.warn('[game] handleFold: unknown player ' + playerId);
+        return;
+    }
+    player.hasFolded = true;
 
     const activePlayers = gameState.players.filter(p => !p.hasFolded);
 
@@ -413,15 +474,25 @@ function resetBiddingTimer() {
 
 let cpuBidInterval, bidTimeoutInterval, turnTimeoutInterval, trumpTimeoutInterval;
 
+function safeLoop(name, fn) {
+    return function () {
+        try {
+            fn();
+        } catch (e) {
+            console.error('[game] Error in ' + name + ' loop:', e);
+        }
+    };
+}
+
 function startGameLoops() {
     stopGameLoops();
     const hasCPU = gameState?.players?.some(p => p.isCPU);
     if (hasCPU) {
-        cpuBidInterval = setInterval(runCpuBidding, 1000);
+        cpuBidInterval = setInterval(safeLoop('runCpuBidding', runCpuBidding), 1000);
     }
-    bidTimeoutInterval = setInterval(checkBiddingTimeout, 1000);
-    turnTimeoutInterval = setInterval(checkTurnTimeout, 1000);
-    trumpTimeoutInterval = setInterval(checkTrumpSelectionTimeout, 1000);
+    bidTimeoutInterval = setInterval(safeLoop('checkBiddingTimeout', checkBiddingTimeout), 1000);
+    turnTimeoutInterval = setInterval(safeLoop('checkTurnTimeout', checkTurnTimeout), 1000);
+    trumpTimeoutInterval = setInterval(safeLoop('checkTrumpSelectionTimeout', checkTrumpSelectionTimeout), 1000);
 }
 
 function stopGameLoops() {
@@ -439,7 +510,7 @@ let cpuTrumpPlan = null;
 let cpuMovePlan = null;
 
 function runCpuBidding() {
-    if (!isHost || gameState.isPaused || gameState.phase !== 'BIDDING') return;
+    if (!isHost || gameState.isPaused || gameState.phase !== 'BIDDING' || gameState.highestBid.amount === 0) return;
     let changed = false;
     let plannedThisTick = false;
 
@@ -451,19 +522,30 @@ function runCpuBidding() {
         if (!plan) {
             if (plannedThisTick) return;
             plannedThisTick = true;
-            plan = { maxBid: getCpuMaxBid(player.hand, gameState.players.length), nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
+            let maxBid = MIN_BID - 5;
+            try {
+                maxBid = getCpuMaxBid(player.hand, gameState.players.length);
+            } catch (e) {
+                console.error('[game] getCpuMaxBid failed for ' + player.name + '; CPU will fold.', e);
+            }
+            plan = { maxBid, nextActionAt: Date.now() + 1200 + Math.random() * 2200 };
             cpuBidPlans[player.id] = plan;
         }
         if (Date.now() < plan.nextActionAt) return;
 
-        const nextAmount = gameState.highestBid.amount === 0 ? MIN_BID : gameState.highestBid.amount + 5;
-        if (nextAmount <= plan.maxBid && nextAmount <= MAX_BID) {
-            handlePlaceBid(player.id, nextAmount);
-        } else if (gameState.highestBid.playerId === null &&
-                   gameState.players.filter(p => !p.hasFolded).length === 1) {
-            handlePlaceBid(player.id, MIN_BID);
-        } else {
-            handleFold(player.id);
+        try {
+            const nextAmount = gameState.highestBid.amount === 0 ? MIN_BID : gameState.highestBid.amount + 5;
+            if (nextAmount <= plan.maxBid && nextAmount <= MAX_BID) {
+                handlePlaceBid(player.id, nextAmount);
+            } else if (gameState.highestBid.playerId === null &&
+                       gameState.players.filter(p => !p.hasFolded).length === 1) {
+                handlePlaceBid(player.id, MIN_BID);
+            } else {
+                handleFold(player.id);
+            }
+        } catch (e) {
+            console.error('[game] CPU bidding action failed for ' + player.name + ':', e);
+            try { handleFold(player.id); } catch (e2) { console.error('[game] CPU fallback fold also failed:', e2); }
         }
         plan.nextActionAt = Date.now() + 1200 + Math.random() * 2200;
         changed = true;
@@ -498,6 +580,34 @@ function resetTurnTimer() {
     gameState.turnDeadline = Date.now() + TURN_TIME_MS;
 }
 
+function pickAutoCard(player) {
+    try {
+        const card = getBestCardToPlay(player.id, gameState);
+        if (card && isCardPlayable(player.id, card)) return card;
+        if (card) console.warn('[game] AI chose an illegal card for ' + player.name + '; using a random legal card.');
+    } catch (e) {
+        console.error('[game] getBestCardToPlay failed for ' + player.name + '; using a random legal card.', e);
+    }
+    const playable = player.hand.filter(c => isCardPlayable(player.id, c));
+    return playable.length > 0 ? playable[Math.floor(Math.random() * playable.length)] : null;
+}
+
+function autoPlayFor(player) {
+    const before = player.hand.length;
+    const card = pickAutoCard(player);
+    if (!card) {
+        console.warn('[game] No playable card found for ' + player.name + '; clearing the turn clock.');
+        gameState.turnDeadline = null;
+        return false;
+    }
+    handlePlayCard(player.id, card);
+    if (player.hand.length === before) {
+        console.warn('[game] handlePlayCard rejected the auto-picked card for ' + player.name + '.');
+        return false;
+    }
+    return true;
+}
+
 function checkTurnTimeout() {
     if (!isHost) return;
     if (gameState.isPaused) return;
@@ -511,10 +621,8 @@ function checkTurnTimeout() {
             cpuMovePlan = { playerId: player.id, actAt: Date.now() + 700 + Math.random() * 1300 };
         }
         if (Date.now() < cpuMovePlan.actAt) return;
-        const card = getBestCardToPlay(player.id, gameState);
         cpuMovePlan = null;
-        if (card) handlePlayCard(player.id, card);
-        else gameState.turnDeadline = null;
+        autoPlayFor(player);
         broadcastState();
         return;
     }
@@ -538,13 +646,7 @@ function checkTurnTimeout() {
     }
 
     if ((isPlayerDisconnected && hasGraceExpired(player.id))) {
-        const cardToPlay = getBestCardToPlay(player.id, gameState);
-
-        if (cardToPlay) {
-            handlePlayCard(player.id, cardToPlay);
-        } else {
-            gameState.turnDeadline = null;
-        }
+        autoPlayFor(player);
         broadcastState();
     }
 }
@@ -582,9 +684,14 @@ function checkTrumpSelectionTimeout() {
             cpuTrumpPlan = { playerId: bidderId, actAt: Date.now() + 1000 + Math.random() * 1500 };
         }
         if (Date.now() >= cpuTrumpPlan.actAt) {
-            const choice = getCpuTrumpChoice(bidder, gameState.players.length, gameState.highestBid.amount);
             cpuTrumpPlan = null;
-            handleSetTrump(bidderId, choice.suit, choice.calls);
+            try {
+                const choice = getCpuTrumpChoice(bidder, gameState.players.length, gameState.highestBid.amount);
+                handleSetTrump(bidderId, choice.suit, choice.calls);
+            } catch (e) {
+                console.error('[game] CPU trump choice failed; choosing randomly:', e);
+                autoResolveTrumpSelection();
+            }
             broadcastState();
         }
         return;
@@ -604,6 +711,10 @@ function togglePause() {
 
     if (!gameState.isPaused) {
         gameState.pausedRemaining = null;
+        if (gameState.phase === 'TRICK_EVALUATION' && trickEvalTimeout) {
+            clearTimeout(trickEvalTimeout);
+            trickEvalTimeout = null;
+        }
         if (gameState.biddingDeadline) {
             gameState.pausedRemaining = gameState.biddingDeadline - Date.now();
             gameState.biddingDeadline = null;
@@ -628,6 +739,7 @@ function togglePause() {
         }
         gameState.pausedRemaining = null;
         gameState.isPaused = false;
+        if (gameState.phase === 'TRICK_EVALUATION') scheduleTrickEvaluation(1500);
     }
     broadcastState();
 }
@@ -643,6 +755,12 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
     if (gameState.isPaused) return;
     if (gameState.phase !== 'TRUMP_SELECTION' || gameState.highestBid.playerId !== playerId) return;
     if (!suits.includes(suit)) return;
+    const bidderIndex = gameState.players.findIndex(p => p.id === playerId);
+    if (bidderIndex === -1) {
+        console.error('[game] handleSetTrump: bid winner is not a seated player (' + playerId + ').');
+        return;
+    }
+
     const cleanCalled = (Array.isArray(calledCardsArray) ? calledCardsArray : []).filter(isValidCardCode);
 
     gameState.trumpSuit = suit;
@@ -652,7 +770,6 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
     gameState.calledCards = cleanCalled.slice(0, allowedCards);
     gameState.originalCalledCards = cleanCalled;
     
-    const bidderIndex = gameState.players.findIndex(p => p.id === playerId);
     gameState.players[bidderIndex].team = 'BIDDER_TEAM';
     gameState.turnIndex = bidderIndex;
 
@@ -667,13 +784,18 @@ function handleSetTrump(playerId, suit, calledCardsArray) {
 }
 
 function getSanitizedStateForClient(clientId) {
-    let safeState = JSON.parse(JSON.stringify(gameState));
-    
-    safeState.players.forEach(p => {
-        if (p.id !== clientId) {
-            const cardCount = p.hand.length;
-            p.hand = new Array(cardCount).fill(null);
-        }
-    });
-    return safeState;
+    try {
+        let safeState = JSON.parse(JSON.stringify(gameState));
+
+        safeState.players.forEach(p => {
+            if (p.id !== clientId) {
+                const cardCount = Array.isArray(p.hand) ? p.hand.length : 0;
+                p.hand = new Array(cardCount).fill(null);
+            }
+        });
+        return safeState;
+    } catch (e) {
+        console.error('[game] Failed to build sanitized state:', e);
+        throw e;
+    }
 }

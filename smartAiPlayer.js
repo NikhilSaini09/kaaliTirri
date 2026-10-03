@@ -139,11 +139,6 @@ function seedTrickMemory(simState, realState) {
     trickMemories.set(simState, copy);
 }
 
-// Kept for callers that want the plain list of completed tricks, in memory order.
-function reconstructTrickHistory(state) {
-    return getTrickMemory(state).tricks.map(t => t.cards);
-}
-
 function resolveTrickWinnerCard(trick, trumpSuit) {
     if (!trick || trick.length === 0) return null;
     const leadSuit = trick[0].suit;
@@ -330,6 +325,7 @@ function isBidderAccountedFor(state) {
 
 // The winning bid. game.js may expose it under several names; __bid is what the simulations set.
 function getBidAmount(state) {
+    if (state.highestBid && typeof state.highestBid.amount === 'number' && state.highestBid.amount > 0) return state.highestBid.amount;
     if (typeof state.__bid === 'number') return state.__bid;
     const names = ['bidAmount', 'biddingAmount', 'currentBid', 'highestBid', 'winningBid', 'bidValue', 'bid', 'BIDDING_AMOUNT'];
     for (const k of names) if (typeof state[k] === 'number' && state[k] >= 100 && state[k] <= 250) return state[k];
@@ -914,7 +910,26 @@ function gateKaaliCandidates(playerId, state, legal) {
     return legal.filter(c => !isKaali(c));
 }
 
+// Public entry point. The AI is large and heuristic-heavy; if anything in it throws, the table
+// must still get a legal move, so fall back to a random legal card and log what happened.
 function getBestCardToPlay(playerId, state) {
+    try {
+        return getBestCardToPlayCore(playerId, state);
+    } catch (e) {
+        console.error('[ai] getBestCardToPlay failed for ' + playerId + '; falling back to a random legal card.', e);
+        try {
+            const player = state.players.find(p => p.id === playerId);
+            if (!player || player.hand.length === 0) return null;
+            const legal = getLegalCards(player, state);
+            return legal[Math.floor(Math.random() * legal.length)] || null;
+        } catch (e2) {
+            console.error('[ai] The random-card fallback failed too:', e2);
+            return null;
+        }
+    }
+}
+
+function getBestCardToPlayCore(playerId, state) {
     const player = state.players.find(p => p.id === playerId);
     if (!player || player.hand.length === 0) return null;
     getTrickMemory(state);
@@ -931,7 +946,9 @@ function getBestCardToPlay(playerId, state) {
                 const choice = getBestCardToPlayEndgame(playerId, state, candidates);
                 if (choice) return choice;
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error('[ai] Endgame search failed; using the standard heuristic instead.', e);
+        }
     }
 
     let choice = getBestCardToPlayInner(playerId, state);
@@ -996,6 +1013,36 @@ function isPrematureAceLead(card, player, state) {
     if (card.value !== 'A') return false;
     if (suitRoundsLed(state, card.suit) >= LEAD_ACE_MIN_ROUNDS) return false;
     return !player.hand.some(c => c.suit === card.suit && c.value === 'K');
+}
+
+function isTrickWinGuaranteed(state, currentWinnerCard, voidMap) {
+    if (!currentWinnerCard) return false;
+    // +1 accounts for the card the current player is about to drop
+    const cardsPlayedSoFar = state.board.length + 1; 
+    if (cardsPlayedSoFar >= state.players.length) return true;
+
+    const leadSuit = state.board[0].suit;
+    const trumpSuit = state.trumpSuit;
+    const isWinnerTrump = currentWinnerCard.suit === trumpSuit;
+    const winnerRank = getCardRank(currentWinnerCard);
+
+    // Find players who haven't played yet this trick
+    const playedPlayerIds = new Set(state.board.map(c => c.playedBy));
+    const pendingPlayers = state.players.filter(p => !playedPlayerIds.has(p.id));
+
+    for (const opp of pendingPlayers) {
+        const oppVoids = voidMap[opp.id] || new Set();
+        
+        // If current winner isn't trump, an opponent void in the lead suit might ruff it
+        if (!isWinnerTrump) {
+            if (oppVoids.has(leadSuit) && !oppVoids.has(trumpSuit)) return false;
+        }
+        // If opponent hasn't shown void in the winning suit, and the winner isn't the Ace
+        if (!oppVoids.has(currentWinnerCard.suit) && winnerRank < values.length - 1) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Feeding thresholds: the chance our team takes the trick must clear these for the card ACTUALLY
@@ -1091,6 +1138,10 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         }
     }
 
+    const isTeammateWinGuaranteed = isTeammateWinning && isTrickWinGuaranteed(state, currentWinnerCard, voidMap);
+    const kaaliOnBoard = state.board.some(isKaali);
+    const mustRescueKaali = kaaliOnBoard && !isTeammateWinGuaranteed;
+
     // ----- shared helpers -------------------------------------------------------------
     const prob = (c) => estimateTeamTrickProb(playerId, state, c);
     const secured = (c) => trickSecuredByCard(state, playerId, c, ctx);
@@ -1142,12 +1193,18 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
     if (state.board.length === 0) {
         const others = state.players.filter(p => p.id !== playerId && p.hand.length > 0);
 
+        const unseenTrumpExists = ctx.unseen.some(c => c.suit === trump);
+        const canRuff = p =>
+            p.hand.length > 0 &&
+            certainTeamOf(ctx, state, p.id) !== myTrueTeam &&        // certain teammates can't hurt us
+            !(voidMap[p.id] || new Set()).has(trump) &&              // proven void in trump = can't ruff
+            unseenTrumpExists;                                       // no trump left out there = nobody can ruff
+        const nobodyCanRuff = !others.some(canRuff);
+
         const guaranteedSuits = suits.filter(s =>
-            s !== trump &&
-            others.length > 0 &&
+            s !== trump && nobodyCanRuff && others.length > 0 &&
             others.every(p => (voidMap[p.id] || new Set()).has(s)) &&
-            validCards.some(c => c.suit === s)
-        );
+            validCards.some(c => c.suit === s));
         if (guaranteedSuits.length > 0) {
             const safeCards = validCards.filter(c => guaranteedSuits.includes(c.suit));
             return safeCards.sort((a, b) => {
@@ -1232,6 +1289,16 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
         const dumpPool = (() => { const nk = validCards.filter(c => !isKaali(c)); return nk.length ? nk : validCards; })();
         const dumpCard = dumpPool.slice().sort(byPointsThenRankAsc)[0];
 
+        if (mustRescueKaali) {
+            let winningCards = validCards.filter(c => {
+                if (currentWinnerCard && currentWinnerCard.suit === trump && leadSuit !== trump) return false;
+                return currentWinnerCard ? getCardRank(c) > getCardRank(currentWinnerCard) : true;
+            });
+            if (winningCards.length > 0) {
+                return winningCards.sort((a, b) => getCardRank(b) - getCardRank(a))[0];
+            }
+        }
+
         if (isTeammateWinning) {
             const feed = pickFeed(validCards.filter(c => !keepForHome(c)), false);
             if (feed) return feed;
@@ -1287,6 +1354,21 @@ function chooseCardHeuristic(playerId, state, excludeKaali) {
     const trumps = validCards.filter(c => c.suit === trump);
     const nonTrumps = validCards.filter(c => c.suit !== trump);
 
+    if (mustRescueKaali && trumps.length > 0) {
+        let winningTrumps = trumps.filter(c => {
+            if (currentWinnerCard && currentWinnerCard.suit === trump) return getCardRank(c) > getCardRank(currentWinnerCard);
+            return true;
+        });
+
+        if (winningTrumps.length > 0) {
+            const roundsLed = suitRoundsLed(state, leadSuit);
+            if (roundsLed === 0) {
+                return winningTrumps.sort((a, b) => getCardRank(a) - getCardRank(b))[0];
+            } else {
+                return winningTrumps.sort((a, b) => getCardRank(b) - getCardRank(a))[0];
+            }
+        }
+    }
     if (isTeammateWinning) {
         // Feed non-trump points first; a point-bearing trump only when the trick is provably ours.
         let feed = pickFeed(nonTrumps.filter(c => !keepForHome(c)), false);
@@ -1577,7 +1659,10 @@ function estimateBidDistribution(hand, numPlayers, samples) {
         try {
             const r = simulateHandAsBidder(hand, numPlayers);
             if (r !== null && !isNaN(r)) results.push(r);
-        } catch (e) { /* skip a bad sample rather than let one failure sink the estimate */ }
+        } catch (e) {
+            // Skip a bad sample rather than let one failure sink the estimate.
+            console.warn('[ai] A bidding simulation sample failed and was skipped:', e);
+        }
     }
     if (results.length < Math.min(5, samples)) return null;
     const mean = results.reduce((a, b) => a + b, 0) / results.length;
@@ -1594,7 +1679,12 @@ function estimateBidDistribution(hand, numPlayers, samples) {
 function getCpuMaxBid(hand, numPlayers) {
     if (!numPlayers) numPlayers = Math.max(2, Math.round(52 / Math.max(1, hand.length)));
 
-    const dist = estimateBidDistribution(hand, numPlayers, BID_SIM_SAMPLES);
+    let dist = null;
+    try {
+        dist = estimateBidDistribution(hand, numPlayers, BID_SIM_SAMPLES);
+    } catch (e) {
+        console.error('[ai] estimateBidDistribution failed; using the share-based estimate.', e);
+    }
     let ceiling;
     if (dist) {
         ceiling = dist.mean - BID_RISK_LAMBDA * Math.max(dist.sd, BID_MIN_SIGMA);
@@ -1769,6 +1859,7 @@ function getCpuTrumpChoice(player, numPlayers, bidAmount) {
         const bid = (typeof bidAmount === 'number' && bidAmount > 0) ? bidAmount : null;
         return chooseTrumpAndCallsBySimulation(player, numPlayers, bid, base) || base;
     } catch (e) {
+        console.error('[ai] Simulated trump choice failed; using the heuristic choice.', e);
         return base;
     }
 }

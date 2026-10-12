@@ -9,6 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <link rel="icon" type="image/webp" href="Assets/3OfSpade.webp">
     <link rel="icon" type="image/svg+xml" href="Assets/3OfSpade.svg">
 </head>
@@ -37,6 +38,7 @@
         <div class="landing-card">
             <input type="text" id="playerName" placeholder="Your name">
             <button id="hostBtn" class="btn-success">Create Room</button>
+            <button id="offlineBtn" class="btn-wood" title="Create offline room with bots (Room 000000)">Play Offline (Bots)</button>
             <div class="divider-row"><hr><span>OR</span><hr></div>
             <input type="text" id="joinId" placeholder="Room ID">
             <button id="joinBtn" class="btn-info">Join Room</button>
@@ -58,6 +60,7 @@
             <button id="saveBtn" class="btn-wood">Save Game</button>
             <label for="loadInput" class="btn-wood">Load Save</label>
             <input type="file" id="loadInput" accept=".json" style="display: none;">
+            <button id="lobbyChatBtn" type="button" class="btn-wood lobby-chat-btn" title="Open table chat">💬 Chat <span id="lobbyChatBadge" class="chat-unread-badge" style="display: none;"></span></button>
         </div>
     </div>
 
@@ -102,8 +105,8 @@
 
             <div id="bidding-panel" class="action-panel">
                 <h3>Place Your Bid</h3>
-                <p class="hint">Multiples of 5 only, 130&ndash;250 points.</p>
-                <input type="number" id="bidAmount" min="130" max="250" step="5">
+                <p class="hint">Multiples of 5 only, 80&ndash;250 points.</p>
+                <input type="number" id="bidAmount" min="80" max="250" step="5">
                 <div class="btn-row">
                     <button id="submitBidBtn" class="btn-success">Bid</button>
                     <button id="foldBtn" class="btn-danger">Fold</button>
@@ -127,6 +130,11 @@
             <div class="pause-card">
                 <h2>⏸ Game Paused</h2>
                 <p>The host has paused the game. Sit tight.</p>
+                <div class="pause-actions-row">
+                    <button id="pauseChatBtn" type="button" class="btn-brass pause-action-btn" title="Open Table Chat">💬 Chat <span id="pauseChatBadge" class="chat-badge" style="display: none;"></span></button>
+                    <button id="pauseHistoryBtn" type="button" class="btn-wood pause-action-btn" title="View Trick History">📜 History</button>
+                    <button id="pauseWonCardsBtn" type="button" class="btn-wood pause-action-btn" title="View Won Cards">🃏 Won Cards</button>
+                </div>
                 <button id="resumeFromOverlayBtn" class="btn-success" style="display: none;">Resume Game</button>
             </div>
         </div>
@@ -161,12 +169,64 @@
         <div id="won-cards-modal-backdrop" style="display: none;"></div>
         <div id="won-cards-modal" style="display: none;">
             <div class="won-cards-header">
-                <h3 id="won-cards-title">Won Cards</h3>
+                <div class="won-cards-header-left">
+                    <h3 id="won-cards-title">Won Cards</h3>
+                    <select id="wonCardsPlayerSelect" class="won-player-select" aria-label="Select player to view won cards"></select>
+                </div>
                 <button id="closeWonCardsBtn" class="btn-danger">✕ Close</button>
             </div>
             <div id="won-cards-list"></div>
         </div>
+
+        <!-- Trick History Modal -->
+        <div id="trick-history-modal-backdrop" style="display: none;"></div>
+        <div id="trick-history-modal" style="display: none;">
+            <div class="won-cards-header">
+                <h3 id="trick-history-title">📜 Trick History</h3>
+                <button id="closeTrickHistoryBtn" class="btn-danger">✕ Close</button>
+            </div>
+            <div id="trick-history-list"></div>
+        </div>
+
     </div>
+
+    <!-- Table Chat & Emoji Effects Modal -->
+    <div id="chat-modal-backdrop" style="display: none;"></div>
+    <div id="chat-modal" style="display: none;">
+        <div class="won-cards-header chat-header">
+            <h3>💬 Table Chat</h3>
+            <button id="closeChatBtn" class="btn-danger">✕ Close</button>
+        </div>
+        <div class="chat-body-wrapper">
+            <div id="chat-messages-container"></div>
+            <div class="chat-footer-controls">
+                <div id="emoji-picker-popover" style="display: none;">
+                    <emoji-picker class="dark"></emoji-picker>
+                    <div id="emoji-picker-fallback" style="display: none;"></div>
+                </div>
+                <div class="chat-input-row">
+                    <button id="chatEmojiToggleBtn" type="button" class="chat-tool-btn" title="Pick Emoji">😊</button>
+                    <input type="text" id="chatInput" placeholder="Type a message..." maxlength="120" autocomplete="off">
+                    <button id="chatSendBtn" type="button" class="chat-send-btn" title="Send Message">➤</button>
+                </div>
+                <div class="chat-reactions-row">
+                    <button class="quick-reaction-btn" data-emoji="👏" title="Clap">👏</button>
+                    <button class="quick-reaction-btn" data-emoji="😂" title="Laugh">😂</button>
+                    <button class="quick-reaction-btn" data-emoji="🔥" title="Fire">🔥</button>
+                    <button class="quick-reaction-btn" data-emoji="🎉" title="Party">🎉</button>
+                    <button class="quick-reaction-btn" data-emoji="♠️" title="Spades">♠️</button>
+                    <button class="quick-reaction-btn" data-emoji="♥️" title="Hearts">♥️</button>
+                    <button class="quick-reaction-btn" data-emoji="😭" title="Cry">😭</button>
+                    <button class="quick-reaction-btn" data-emoji="🤫" title="Shh">🤫</button>
+                    <button class="quick-reaction-btn" data-emoji="🤯" title="Mind Blown">🤯</button>
+                    <button class="quick-reaction-btn" data-emoji="👍" title="Thumbs Up">👍</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Reactions Layer -->
+    <div id="floating-emojis-container"></div>
 
     <div id="how-to-play-backdrop" class="page-modal-backdrop" style="display: none;"></div>
     <div id="how-to-play-modal" class="page-modal" style="display: none;">
@@ -176,33 +236,45 @@
         </div>
         <div class="page-modal-body">
             <h4>The Deck &amp; Scoring</h4>
-            <p>A standard 52-card deck, dealt evenly to every seated player (any leftover cards are set aside unused). Rank, low to high: 2 3 4 5 6 7 8 9 10 J Q K A.</p>
-            <p>Card points: <b>A, K, Q, J, 10</b> = 10 pts each &middot; <b>5</b> = 5 pts &middot; <b>3♠ ("Kaali Tirri")</b> = 30 pts &middot; everything else = 0 pts. Maximum possible in play: 250 pts.</p>
+            <p>A standard 52-card deck dealt evenly to every seated player (any leftover cards are removed). Rank, low to high: 2 3 4 5 6 7 8 9 10 J Q K A.</p>
+            <p>Card points: <b>A, K, Q, J, 10</b> = 10 pts each &middot; <b>5</b> = 5 pts &middot; <b>3♠ ("Kaali Tirri")</b> = 30 pts &middot; all other cards = 0 pts. Total in play: <b>250 pts</b>.</p>
             <hr>
             <h4>Bidding</h4>
-            <p>After the deal, bidding opens: raise in multiples of 5 between <b>130</b> and <b>250</b>, or fold. Whoever bids highest (or hits 250 first) becomes the <b>Bid Winner</b> and sets the terms for the hand.</p>
-            <p>Bidding has a 30-second clock once the first bid lands - if nobody bids in time, a random player is handed the win at 130 pts. If the clock runs out mid-bidding, everyone who hasn't matched the current high bid is folded automatically.</p>
+            <p>After the deal, bidding opens in multiples of 5 up to <b>250</b>, or players may fold. The minimum bid dynamically scales with the number of seated players:</p>
+            <p>&bull; <b>2–3 Players:</b> Minimum <b>80 pts</b><br>
+               &bull; <b>4 Players:</b> Minimum <b>120 pts</b><br>
+               &bull; <b>5+ Players:</b> Minimum <b>140 pts</b></p>
+            <p>Bidding features a 30-second decision timer. If the opening timer expires with no bids, a random player is assigned the bid at the table's minimum bid. Bots wait 15 seconds before opening to give human players the first chance.</p>
             <hr>
             <h4>Trump &amp; Secret Teams</h4>
-            <p>The Bid Winner picks a <b>trump suit</b> and calls one or more <b>partner cards</b> by rank and suit (the number allowed scales with player count). Whoever holds a called card is secretly on the Bidder's team - including possibly the Bid Winner's own hand.</p>
-            <p>Nobody finds out who's on which team until a called card is actually played to the table. Anyone not on the Bidder's team by the end is a <b>Defender</b>.</p>
+            <p>The Bid Winner has 60 seconds to pick the <b>Trump Suit ("Cart")</b> and call <b>Partner Cards</b>. The number of called partners scales based on player count (⌊(N - 2) / 2⌋):</p>
+            <p>&bull; <b>2–3 Players:</b> 0 partners (1 Bidder vs Defenders)<br>
+               &bull; <b>4–5 Players:</b> 1 partner (2 Bidders vs Defenders)<br>
+               &bull; <b>6–7 Players:</b> 2 partners (3 Bidders vs Defenders)<br>
+               &bull; <b>8–9 Players:</b> 3 partners (4 Bidders vs Defenders)<br>
+               &bull; <b>10 Players:</b> 4 partners (5 Bidders vs 5 Defenders)</p>
+            <p>Whoever holds a called card secretly joins the <b>Bidder Team</b>. No one knows who is on which team until the called card is actually played to the table. All other players form the <b>Defender Team</b>.</p>
             <hr>
             <h4>Playing a Trick</h4>
-            <p>The Bid Winner leads the first trick; whoever wins a trick leads the next. Follow the led suit if you're able to. If you can't, play anything - trump or otherwise. Highest card of the led suit wins the trick, unless someone plays trump, in which case the highest trump wins instead.</p>
-            <p>Each trick's points go to whoever wins it, and the cards move into that player's <b>Won Pile</b> - click any won pile to see exactly what's in it.</p>
-            <p>You get 30 seconds per turn. Run out the clock and the game auto-plays a legal card on your behalf, so nobody can stall the table.</p>
+            <p>The Bid Winner leads the first trick; whoever wins a trick leads the next. Play proceeds clockwise.</p>
+            <p>You <b>must follow the led suit</b> if you hold one. If void, you can play any card, including trump. The highest card of the led suit wins, unless trump is played, in which case the highest trump wins.</p>
+            <p>Visual cues highlight whose turn it is and which card currently leads the trick. Each trick's cards move to the winner's <b>Won Pile</b>.</p>
+            <p>Players have 30 seconds per turn. If the timer expires or a player disconnects, the game auto-plays a valid card to keep gameplay moving smoothly.</p>
             <hr>
             <h4>Winning the Round</h4>
-            <p>Once every card has been played, team totals are added up. If the Bidder's team meets or beats the bid amount, they win the round; otherwise the Defenders take it.</p>
+            <p>Once all tricks are played, team points are tallied. If the Bidder Team achieves or exceeds the bid amount, they win; otherwise, the Defender Team wins.</p>
             <hr>
-            <h4>CPU Players</h4>
-            <p>Short a few people? The host can add CPU-controlled seats from the waiting room. CPUs bid based on their own hand strength, choose trump and partner cards sensibly when they win the bid, and play every card using a fairness-respecting strategy that only ever looks at their own hand and what's already been publicly played - never at anyone else's cards.</p>
+            <h4>Chat &amp; Emoji Reactions</h4>
+            <p>Use the <b>💬 Chat</b> button in the waiting room or game screen to message the table with unread notification alerts. Send categorized emojis via the picker or tap quick reaction buttons to float animated emojis across everyone's screens in real time.</p>
             <hr>
-            <h4>Reconnecting</h4>
-            <p>Lost your connection or closed the tab mid-hand? Rejoin with the same name (or access code, if the host set one up) and you'll seamlessly reclaim your seat, cards and all. A short grace period protects a disconnected seat before the game auto-plays for it.</p>
+            <h4>CPU Bots &amp; AutoPlay</h4>
+            <p>The host can add up to 7 fair-play AI bots in the lobby. Bots never peek at hidden cards, deciding bids and plays using table memory and simulations. Human players can also toggle <b>AutoPlay</b> in the top bar anytime to let the AI take over.</p>
             <hr>
-            <h4>Host Tools</h4>
-            <p>The host's gear menu can pause the whole table, re-deal, save the game to a file and reload it later, and hand host duties to another player. In the waiting room, the host can tick/untick who's actually seated for the next hand (everyone else spectates) and reorder the turn cycle.</p>
+            <h4>Offline Mode</h4>
+            <p>Play without an internet connection or signaling server by clicking <b>"Play Offline (Bots)"</b> on the landing page to start an instant local bot match (Room 000000).</p>
+            <hr>
+            <h4>Modals &amp; Host Tools</h4>
+            <p>Review the full hand replay anytime in <b>📜 Trick History</b>, or click any player's <b>Won Pile</b> to see their collected cards. The host gear menu (⚙️) allows pausing/resuming with synchronized clocks, re-dealing, saving/loading game states, and reordering seats.</p>
         </div>
     </div>
 

@@ -20,8 +20,18 @@ function sortHand(hand) {
     });
 }
 
-const MIN_BID = 130;
+let MIN_BID = 80;
 const MAX_BID = 250;
+
+function updateMinBid(numPlayers) {
+    if (numPlayers === 4) MIN_BID = 120;
+    else if (numPlayers > 4) MIN_BID = 140;
+    else MIN_BID = 80;
+    if (typeof gameState === 'object' && gameState) {
+        gameState.minBid = MIN_BID;
+    }
+    return MIN_BID;
+}
 const BIDDING_TIME_MS = 30000;
 const TRUMP_SELECTION_TIME_MS = 60000;
 const TURN_TIME_MS = 30000;
@@ -30,12 +40,12 @@ const RECONNECT_GRACE_MS = 10000;
 let gameState = {
     phase: 'LOBBY',       // LOBBY, BIDDING, TRUMP_SELECTION, PLAYING, TRICK_EVALUATION, GAMEOVER
     deck: [],
-    board: [],            
-    players: [],          
+    board: [],
+    players: [],
     dealerIndex: 0,       
-    turnIndex: 0,         
+    turnIndex: 0,
     highestBid: { playerId: null, amount: 0, playerName: "" },
-    trumpSuit: null,      
+    trumpSuit: null,
     calledCards: [],
     originalCalledCards: [],
     spectators: [],
@@ -48,7 +58,9 @@ let gameState = {
     trumpSelectionDeadline: null,
     isPaused: false,
     pausedRemaining: null,
-    draftTrump: null
+    draftTrump: null,
+    biddingStartedAt: null,
+    trickCount: 0
 };
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
 function toStatsMap(obj) {
@@ -297,8 +309,15 @@ function evaluateTrick() {
         return;
     }
 
+    gameState.trickCount = (gameState.trickCount || 0) + 1;
+    const trickCards = gameState.board.map(c => ({
+        ...c,
+        isWinningCard: (c.id === winningCard.id || (c.value === winningCard.value && c.suit === winningCard.suit && c.playedBy === winningCard.playedBy)),
+        trickNumber: gameState.trickCount
+    }));
+
     gameState.players[winnerIndex].points += trickPoints;
-    gameState.players[winnerIndex].wonCards.push(...gameState.board); 
+    gameState.players[winnerIndex].wonCards.push(trickCards); 
 
     gameState.turnIndex = winnerIndex;
     gameState.board = []; 
@@ -378,6 +397,8 @@ function startDeal() {
         return;
     }
 
+    updateMinBid(numPlayers);
+
     const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));
     const totalCardsToDeal = cardsPerPlayer * numPlayers;
     const cardsToRemoveCount = 52 - totalCardsToDeal;
@@ -393,6 +414,7 @@ function startDeal() {
     gameState.trumpSuit = null;
     gameState.calledCards = [];
     gameState.originalCalledCards = [];
+    gameState.trickCount = 0;
 
     gameState.players.forEach(p => {
         p.hand = [];
@@ -421,11 +443,13 @@ function startDeal() {
 
     gameState.players.forEach(p => sortHand(p.hand));
     gameState.phase = 'BIDDING';
+    gameState.biddingStartedAt = Date.now();
 }
 
 function enterTrumpSelection() {
     gameState.phase = 'TRUMP_SELECTION';
     gameState.biddingDeadline = null;
+    gameState.biddingStartedAt = null;
     gameState.trumpSelectionDeadline = Date.now() + TRUMP_SELECTION_TIME_MS;
 }
 
@@ -486,31 +510,34 @@ function resetBiddingTimer() {
     gameState.biddingDeadline = Date.now() + BIDDING_TIME_MS;
 }
 
-let cpuBidInterval, bidTimeoutInterval, turnTimeoutInterval, trumpTimeoutInterval;
+let hostGameLoopInterval = null;
+function hostGameTick() {
+    if (!isHost || gameState.isPaused) return;
 
-function safeLoop(name, fn) {
-    return function () {
-        try {
-            fn();
-        } catch (e) {
-            console.error('[game] Error in ' + name + ' loop:', e);
+    try {
+        if (gameState.phase === 'BIDDING') {
+            runCpuBidding();
+            checkBiddingTimeout();
+        } else if (gameState.phase === 'TRUMP_SELECTION') {
+            checkTrumpSelectionTimeout();
+        } else if (gameState.phase === 'PLAYING') {
+            checkTurnTimeout();
         }
-    };
+    } catch (e) {
+        console.error('[game] Error in hostGameTick:', e);
+    }
 }
 
 function startGameLoops() {
     stopGameLoops();
-    cpuBidInterval = setInterval(safeLoop('runCpuBidding', runCpuBidding), 1000);
-    bidTimeoutInterval = setInterval(safeLoop('checkBiddingTimeout', checkBiddingTimeout), 1000);
-    turnTimeoutInterval = setInterval(safeLoop('checkTurnTimeout', checkTurnTimeout), 1000);
-    trumpTimeoutInterval = setInterval(safeLoop('checkTrumpSelectionTimeout', checkTrumpSelectionTimeout), 1000);
+    hostGameLoopInterval = setInterval(hostGameTick, 1000);
 }
 
 function stopGameLoops() {
-    clearInterval(cpuBidInterval);
-    clearInterval(bidTimeoutInterval);
-    clearInterval(turnTimeoutInterval);
-    clearInterval(trumpTimeoutInterval);
+    if (hostGameLoopInterval) {
+        clearInterval(hostGameLoopInterval);
+        hostGameLoopInterval = null;
+    }
 }
 
 startGameLoops();
@@ -520,8 +547,17 @@ let cpuBidPlans = {};
 let cpuTrumpPlan = null;
 let cpuMovePlan = null;
 
+const CPU_OPENING_BID_DELAY_MS = 15000;
+
 function runCpuBidding() {
-    if (!isHost || gameState.isPaused || gameState.phase !== 'BIDDING' || gameState.highestBid.amount === 0) return;
+    if (!isHost || gameState.isPaused || gameState.phase !== 'BIDDING') return;
+
+    // Initial waiting rule: give human players 15 seconds to make the opening bid first
+    if (gameState.highestBid.amount === 0) {
+        if (!gameState.biddingStartedAt || Date.now() - gameState.biddingStartedAt < CPU_OPENING_BID_DELAY_MS) {
+            return;
+        }
+    }
     let changed = false;
     let plannedThisTick = false;
 
@@ -666,7 +702,17 @@ function autoResolveTrumpSelection() {
         if (suits.includes(domSuit)) selectedSuit = domSuit;
     }
     if (!selectedSuit) {
-        selectedSuit = suits[Math.floor(Math.random() * suits.length)];
+        const bidder = gameState.players[bidderIndex];
+        if (bidder && Array.isArray(bidder.hand) && bidder.hand.length > 0) {
+            const suitCounts = {};
+            suits.forEach(s => { suitCounts[s] = 0; });
+            bidder.hand.forEach(c => {
+                if (c && c.suit && suits.includes(c.suit)) suitCounts[c.suit] = (suitCounts[c.suit] || 0) + 1;
+            });
+            selectedSuit = suits.slice().sort((a, b) => suitCounts[b] - suitCounts[a])[0];
+        } else {
+            selectedSuit = suits[Math.floor(Math.random() * suits.length)];
+        }
     }
 
     let candidateCards = [];
@@ -760,6 +806,8 @@ function togglePause() {
         if (gameState.biddingDeadline) {
             gameState.pausedRemaining = gameState.biddingDeadline - Date.now();
             gameState.biddingDeadline = null;
+        } else if (gameState.phase === 'BIDDING' && gameState.highestBid.amount === 0 && gameState.biddingStartedAt) {
+            gameState.biddingOpeningElapsed = Date.now() - gameState.biddingStartedAt;
         } else if (gameState.turnDeadline) {
             gameState.pausedRemaining = gameState.turnDeadline - Date.now();
             gameState.turnDeadline = null;
@@ -769,6 +817,10 @@ function togglePause() {
         }
         gameState.isPaused = true;
     } else {
+        if (gameState.biddingOpeningElapsed !== undefined) {
+            gameState.biddingStartedAt = Date.now() - gameState.biddingOpeningElapsed;
+            delete gameState.biddingOpeningElapsed;
+        }
         if (gameState.pausedRemaining !== null && gameState.pausedRemaining !== undefined) {
             const remaining = Math.max(1000, gameState.pausedRemaining);
             if (gameState.phase === 'BIDDING') {
@@ -840,4 +892,27 @@ function getSanitizedStateForClient(clientId) {
         console.error('[game] Failed to build sanitized state:', e);
         throw e;
     }
+}
+
+function getReconstructedTrickHistory(state = gameState) {
+    const allTricks = [];
+    if (!state || !Array.isArray(state.players)) return allTricks;
+    state.players.forEach(player => {
+        if (!player.wonCards) return;
+        player.wonCards.forEach((item, idx) => {
+            const trickCards = Array.isArray(item) ? item : [item];
+            if (trickCards.length === 0) return;
+            const trickNumber = trickCards[0]?.trickNumber || (idx + 1);
+            const trickPoints = trickCards.reduce((s, c) => s + (typeof getCardPoints === 'function' ? getCardPoints(c) : 0), 0);
+            allTricks.push({
+                trickNumber: trickNumber,
+                winnerName: player.name,
+                winnerId: player.id,
+                cards: trickCards,
+                points: trickPoints
+            });
+        });
+    });
+    allTricks.sort((a, b) => a.trickNumber - b.trickNumber);
+    return allTricks;
 }

@@ -65,6 +65,26 @@ function addTrickToMemory(mem, cards, ordered) {
     }
 }
 
+function reconstructTricksFromState(state) {
+    const allTricks = [];
+    if (!state || !Array.isArray(state.players)) return allTricks;
+    state.players.forEach(player => {
+        if (!player.wonCards) return;
+        player.wonCards.forEach((item, idx) => {
+            const trickCards = Array.isArray(item) ? item : [item];
+            if (trickCards.length === 0) return;
+            const trickNumber = trickCards[0]?.trickNumber || (idx + 1);
+            allTricks.push({
+                trickNumber,
+                winnerId: player.id,
+                cards: trickCards
+            });
+        });
+    });
+    allTricks.sort((a, b) => a.trickNumber - b.trickNumber);
+    return allTricks;
+}
+
 function syncTrickMemory(mem, state) {
     const players = state.players;
     const n = players.length;
@@ -72,34 +92,31 @@ function syncTrickMemory(mem, state) {
 
     let stale = mem.ids.length !== n;
     for (let i = 0; !stale && i < n; i++) {
-        const p = players[i];
-        if (mem.ids[i] !== p.id) { stale = true; break; }
-        const won = p.wonCards || [];
-        const seen = mem.seenLen[p.id] || 0;
-        if (seen > won.length) { stale = true; break; }
-        if (seen > 0) {
-            const a = mem.anchor[p.id];
-            if (!a || won[0].value !== a.value || won[0].suit !== a.suit) { stale = true; break; }
+        if (mem.ids[i] !== players[i].id) { stale = true; break; }
+    }
+    if (stale || state.phase === 'BIDDING' || state.phase === 'LOBBY') {
+        resetTrickMemory(mem, state);
+    }
+
+    const reconstructed = typeof getReconstructedTrickHistory === 'function'
+        ? getReconstructedTrickHistory(state)
+        : reconstructTricksFromState(state);
+
+    if (reconstructed.length < mem.tricks.length) {
+        resetTrickMemory(mem, state);
+    }
+
+    if (reconstructed.length > 0 && mem.tricks.length > 0) {
+        const firstRec = reconstructed[0].cards && reconstructed[0].cards[0];
+        const firstMem = mem.tricks[0].cards && mem.tricks[0].cards[0];
+        if (firstRec && firstMem && (firstRec.value !== firstMem.value || firstRec.suit !== firstMem.suit || firstRec.playedBy !== firstMem.playedBy)) {
+            resetTrickMemory(mem, state);
         }
     }
-    if (stale) resetTrickMemory(mem, state);
 
-    // Pick up whatever is new since the last look (usually nothing).
-    let fresh = null;
-    for (let i = 0; i < n; i++) {
-        const p = players[i];
-        const won = p.wonCards;
-        if (!won) continue;
-        let k = mem.seenLen[p.id] || 0;
-        if (k + n > won.length) continue;
-        if (k === 0) mem.anchor[p.id] = { value: won[0].value, suit: won[0].suit };
-        if (!fresh) fresh = [];
-        for (; k + n <= won.length; k += n) fresh.push(won.slice(k, k + n));
-        mem.seenLen[p.id] = k;
-    }
-    if (fresh) {
-        const ordered = fresh.length === 1;
-        for (const cards of fresh) addTrickToMemory(mem, cards, ordered);
+    while (mem.tricks.length < reconstructed.length) {
+        const nextTrick = reconstructed[mem.tricks.length];
+        addTrickToMemory(mem, nextTrick.cards, true);
     }
     return mem;
 }
@@ -227,9 +244,7 @@ function determineMyTeam(playerId, state) {
     if (player.team !== 'UNKNOWN') return player.team;
 
     const myCodes = new Set(player.hand.map(c => `${c.value}${c.suit}`));
-    const everCalled = (state.calledCards && state.calledCards.length > 0)
-        ? state.calledCards
-        : (state.calledCards || []);
+    const everCalled = (state.calledCards || []);
     if (everCalled.length === 0) return 'DEFENDER_TEAM';
     return everCalled.some(code => myCodes.has(code)) ? 'BIDDER_TEAM' : 'DEFENDER_TEAM';
 }
@@ -301,7 +316,15 @@ const NEUTRAL_MOOD = { label: 'normal', contestShift: 0, feedShift: 0 };
 
 function sumCardPoints(cards) {
     let t = 0;
-    if (cards) for (const c of cards) t += getCardPoints(c);
+    if (cards) {
+        for (const c of cards) {
+            if (Array.isArray(c)) {
+                for (const card of c) t += getCardPoints(card);
+            } else if (c) {
+                t += getCardPoints(c);
+            }
+        }
+    }
     return t;
 }
 
@@ -1523,7 +1546,7 @@ function buildSimFromWorld(state, myId, world, ctx) {
     const simPlayers = state.players.map(p => ({
         id: p.id,
         hand: (p.id === myId ? me.hand : world.hands[p.id]).map(c => ({ ...c })),
-        wonCards: (p.wonCards || []).map(c => ({ ...c })),
+        wonCards: (p.wonCards || []).map(c => Array.isArray(c) ? c.map(x => ({ ...x })) : ({ ...c })),
         team: p.team,
         points: sumCardPoints(p.wonCards)
     }));

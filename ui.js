@@ -62,6 +62,11 @@ const PHASE_LABELS = {
 
 function renderState() {
     try {
+        if (typeof updateMinBid === 'function' && gameState && Array.isArray(gameState.players)) {
+            updateMinBid(gameState.players.length);
+        } else if (gameState && typeof gameState.minBid === 'number') {
+            MIN_BID = gameState.minBid;
+        }
         if (gameState.phase === 'LOBBY') {
             switchView('view-lobby');
             renderLobby();
@@ -76,6 +81,7 @@ function renderState() {
 
 function renderLobby() {
     stopTimerBarLoop();
+    updateChatUnreadBadge();
     const lobbyDiv = document.getElementById('lobby-players');
     lobbyDiv.innerHTML = '';
 
@@ -285,6 +291,46 @@ const prefersReducedMotion = !!(window.matchMedia && window.matchMedia('(prefers
 let boardCardCache = {};
 let lastOppSignature = null;
 
+function resetUiCaches() {
+    boardCardCache = {};
+    lastOppSignature = null;
+    lastHandIds = null;
+    previousTurnPlayerId = null;
+    previousBoardLength = null;
+    bidPanelWasOpen = false;
+    bidAmountEditedByUser = false;
+    hasAutoFocusedBidOnce = false;
+    trumpPanelWasOpen = false;
+    const centerBoard = document.getElementById('center-board');
+    if (centerBoard) centerBoard.innerHTML = '';
+    const myArea = document.getElementById('my-area');
+    if (myArea) myArea.querySelectorAll('.my-card-wrapper').forEach(el => el.remove());
+}
+
+function ensurePersistentStatusRow(myArea) {
+    let statusRow = myArea.querySelector('.my-status-row');
+    if (!statusRow) {
+        statusRow = document.createElement('div');
+        statusRow.className = 'my-status-row';
+        statusRow.innerHTML = `
+            <div class="status-badge-slot"></div>
+            <div class="my-won-pile" style="display: none;" title="Click to view your won cards">
+                <span class="my-won-pile-text"></span>
+            </div>
+            <button type="button" class="status-row-btn status-history-btn" title="View round trick history">📜 History</button>
+            <button type="button" id="statusChatBtn" class="status-row-btn status-chat-btn" title="Open table chat">💬 <span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;"></span></button>
+        `;
+        statusRow.querySelector('.my-won-pile').addEventListener('click', () => {
+            const curMe = (gameState.players || []).find(p => p.id === myPeerId);
+            if (curMe) openWonCardsModal(curMe);
+        });
+        statusRow.querySelector('.status-history-btn').addEventListener('click', () => openTrickHistoryModal());
+        statusRow.querySelector('.status-chat-btn').addEventListener('click', () => openChatModal());
+        myArea.insertBefore(statusRow, myArea.firstChild);
+    }
+    return statusRow;
+}
+
 function renderGameBoard() {
     const myArea = document.getElementById('my-area');
     const boardArea = document.getElementById('center-board');
@@ -425,7 +471,7 @@ function renderGameBoard() {
         const isKaaliTirri = card.value === '3' && card.suit === '♠';
 
         if (!entry) {
-            const cardEl = createCardElement(card, false);
+            const cardEl = createCardElement(card);
             cardEl.classList.add('played-card');
             const rotation = (Math.random() * 12 - 6);
 
@@ -508,12 +554,8 @@ function renderGameBoard() {
 
         let pileHtml = '';
         if (player.wonCards && player.wonCards.length > 0) {
-            pileHtml = isMobile
-                ? `<div class="won-pile-btn" title="Click to view won cards"><span>${escapeHtml(player.wonCards.length)}</span></div>`
-                : ` <div class="won-pile-btn" title="Click to view won cards">
-                        <span>${escapeHtml(player.wonCards.length)}</span>
-                    </div>`
-            ;
+            const numTricks = player.wonCards.length;
+            pileHtml = `<div class="won-pile-btn" title="Click to view won cards"><span>${escapeHtml(numTricks)}</span></div>`;
         }
 
         const fanHtml = isMobile ? '' :
@@ -585,32 +627,43 @@ function renderGameBoard() {
     if (me) {
         const isMyTurn = activeTurnPlayer && activeTurnPlayer.id === me.id;
 
-        const oldStatusRow = myArea.querySelector('.my-status-row');
-        if (oldStatusRow) oldStatusRow.remove();
-        const statusRow = document.createElement('div');
-        statusRow.className = 'my-status-row';
-        myArea.insertBefore(statusRow, myArea.firstChild);
+        const statusRow = ensurePersistentStatusRow(myArea);
+        statusRow.style.display = 'flex';
 
-        if (me.isAutoPlay) {
-            const aiBadge = document.createElement('div');
-            aiBadge.className = 'ai-active-badge';
-            aiBadge.innerHTML = 'AI is playing for you &bull; Tap to resume';
-            aiBadge.title = 'Click to take control back';
-            aiBadge.addEventListener('click', () => {
-                if (isHost) {
-                    me.isAutoPlay = false;
-                    broadcastState();
-                } else {
-                    sendToHost({ type: 'ACTION_TOGGLE_AI' });
+        const badgeSlot = statusRow.querySelector('.status-badge-slot');
+        if (badgeSlot) {
+            if (me.isAutoPlay) {
+                if (!badgeSlot.querySelector('.ai-active-badge')) {
+                    badgeSlot.innerHTML = `<div class="ai-active-badge" title="Click to take control back">AI is playing for you &bull; Tap to resume</div>`;
+                    badgeSlot.querySelector('.ai-active-badge').addEventListener('click', () => {
+                        if (isHost) {
+                            me.isAutoPlay = false;
+                            renderGameBoard();
+                        } else {
+                            sendToHost({ type: 'ACTION_TOGGLE_AI' });
+                        }
+                    });
                 }
-            });
-            statusRow.appendChild(aiBadge);
-        } else if (isMyTurn) {
-            const badge = document.createElement('div');
-            badge.className = 'your-turn-badge';
-            badge.innerHTML = '<span class="turn-dot"></span> Your Turn';
-            statusRow.appendChild(badge);
+            } else if (isMyTurn) {
+                badgeSlot.innerHTML = `<div class="your-turn-badge"><span class="turn-dot"></span> Your Turn</div>`;
+            } else {
+                badgeSlot.innerHTML = '';
+            }
         }
+
+        const wonPileEl = statusRow.querySelector('.my-won-pile');
+        if (wonPileEl) {
+            if (me.wonCards && me.wonCards.length > 0) {
+                wonPileEl.style.display = 'inline-flex';
+                const numTricks = me.wonCards.length;
+                const textSpan = wonPileEl.querySelector('.my-won-pile-text');
+                if (textSpan) textSpan.textContent = `${numTricks} (${me.points || 0} pts)`;
+            } else {
+                wonPileEl.style.display = 'none';
+            }
+        }
+
+        updateChatUnreadBadge();
 
         const currentHandIds = me.hand.map(c => c.id).join('|');
         if (currentHandIds !== lastHandIds) {
@@ -621,7 +674,7 @@ function renderGameBoard() {
                 wrapper.dataset.cardId = card.id;
                 wrapper.style.zIndex = index;
 
-                const cardEl = createCardElement(card, false);
+                const cardEl = createCardElement(card);
                 cardEl.addEventListener('click', () => {
                     if (wrapper.classList.contains('is-playable')) requestPlayCard(card);
                 });
@@ -667,17 +720,6 @@ function renderGameBoard() {
             });
         }
 
-        if (me.wonCards && me.wonCards.length > 0) {
-            const myPileDiv = document.createElement('div');
-            myPileDiv.className = 'my-won-pile';
-            myPileDiv.title = "Click to view your won cards";
-            myPileDiv.innerHTML = `
-                <span>${escapeHtml(me.wonCards.length)} (${escapeHtml(me.points)} pts)</span>
-            `;
-            myPileDiv.addEventListener('click', () => openWonCardsModal(me));
-            statusRow.appendChild(myPileDiv);
-        }
-
         if (me.hasFolded && (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION')) {
         foldBanner.textContent = "You folded — waiting for the rest of the table";
             foldBanner.style.display = 'block';
@@ -693,11 +735,22 @@ function renderGameBoard() {
             showOverlay = true;
             biddingPanel.style.display = 'flex';
 
+            if (typeof updateMinBid === 'function' && gameState && Array.isArray(gameState.players)) {
+                updateMinBid(gameState.players.length);
+            } else if (gameState && typeof gameState.minBid === 'number') {
+                MIN_BID = gameState.minBid;
+            }
+
             const minBid = Math.max(MIN_BID, gameState.highestBid.amount + 5);
             const bidInput = document.getElementById('bidAmount');
             bidInput.min = minBid;
             bidInput.max = MAX_BID;
             bidInput.placeholder = `${minBid}\u2013${MAX_BID}`;
+
+            const biddingHint = document.querySelector('#bidding-panel .hint');
+            if (biddingHint) {
+                biddingHint.textContent = `Multiples of 5 only, ${MIN_BID}\u2013${MAX_BID} points.`;
+            }
 
             if (!bidPanelWasOpen) {
                 bidInput.value = minBid;
@@ -760,11 +813,19 @@ function renderGameBoard() {
         actionOverlay.classList.toggle('no-dim', gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
     } else {
         if (lastHandIds !== null) {
-            myArea.innerHTML = '';
+            myArea.querySelectorAll('.my-card-wrapper').forEach(el => el.remove());
             lastHandIds = null;
         }
         foldBanner.style.display = 'none';
         actionOverlay.style.display = 'none';
+
+        const statusRow = ensurePersistentStatusRow(myArea);
+        statusRow.style.display = 'flex';
+        const badgeSlot = statusRow.querySelector('.status-badge-slot');
+        if (badgeSlot) badgeSlot.innerHTML = '<div class="your-turn-badge">Spectating</div>';
+        const wonPileEl = statusRow.querySelector('.my-won-pile');
+        if (wonPileEl) wonPileEl.style.display = 'none';
+        updateChatUnreadBadge();
     }
 
     // 4. Game Over Modal
@@ -820,7 +881,7 @@ function getCurrentWinningCard(board, trumpSuit) {
     return winning;
 }
 
-function createCardElement(card, isClickable, isPlayable = true) {
+function createCardElement(card) {
     const cardEl = document.createElement('div');
     cardEl.className = `card ${card.suit === '♥' || card.suit === '♦' ? 'red' : 'black'}`;
     const rankEl = document.createElement('span');
@@ -830,11 +891,6 @@ function createCardElement(card, isClickable, isPlayable = true) {
     suitEl.className = 'card-suit';
     suitEl.textContent = card.suit;
     cardEl.append(rankEl, suitEl);
-
-    if (isClickable && !isPlayable) {
-        cardEl.style.opacity = '0.5';
-        cardEl.style.cursor = 'not-allowed';
-    }
     return cardEl;
 }
 
@@ -937,9 +993,10 @@ function loadGame(event) {
                 throw new Error("Invalid structure");
             }
             const saved = parsed.gameState;
-            saved.board = Array.isArray(saved.board) ? saved.board : [];
+            saved.deck = Array.isArray(saved.deck) ? saved.deck.filter(c => c && typeof c === 'object') : [];
+            saved.board = Array.isArray(saved.board) ? saved.board.filter(c => c && typeof c === 'object') : [];
             saved.players.forEach(p => {
-                p.hand = Array.isArray(p.hand) ? p.hand : [];
+                p.hand = Array.isArray(p.hand) ? p.hand.filter(c => c && typeof c === 'object') : [];
                 p.wonCards = Array.isArray(p.wonCards) ? p.wonCards : [];
             });
 
@@ -1028,8 +1085,14 @@ function loadGame(event) {
                 if (idMap[card.playedBy]) card.playedBy = idMap[card.playedBy];
             });
             // Won cards remember who played them too (the CPU's trick memory relies on it).
-            newPlayers.forEach(p => p.wonCards.forEach(card => {
-                if (idMap[card.playedBy]) card.playedBy = idMap[card.playedBy];
+            newPlayers.forEach(p => (p.wonCards || []).forEach(item => {
+                if (Array.isArray(item)) {
+                    item.forEach(card => {
+                        if (card && idMap[card.playedBy]) card.playedBy = idMap[card.playedBy];
+                    });
+                } else if (item && idMap[item.playedBy]) {
+                    item.playedBy = idMap[item.playedBy];
+                }
             }));
 
             if (!(saved.turnIndex >= 0 && saved.turnIndex < newPlayers.length)) {
@@ -1059,6 +1122,11 @@ function loadGame(event) {
             cpuTrumpPlan = null;
             cpuMovePlan = null;
 
+            resetUiCaches();
+            if (typeof updateMinBid === 'function') {
+                updateMinBid(newPlayers.length);
+            }
+
             if (typeof startGameLoops === 'function') startGameLoops();
 
             broadcastState();
@@ -1074,21 +1142,92 @@ function openWonCardsModal(player) {
     const modal = document.getElementById('won-cards-modal');
     const title = document.getElementById('won-cards-title');
     const list = document.getElementById('won-cards-list');
+    const selectEl = document.getElementById('wonCardsPlayerSelect');
 
-    const cleanName = cleanPlayerName(player.name);
-    title.textContent = `${cleanName}'s Won Cards (${player.wonCards ? player.wonCards.length : 0} cards, ${player.points} pts)`;
+    if (!player) {
+        player = (gameState.players || []).find(p => p.id === myPeerId) || gameState.players?.[0] || { name: 'Player', wonCards: [], points: 0 };
+    }
+
+    if (selectEl) {
+        selectEl.innerHTML = '';
+        (gameState.players || []).forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            const isMe = p.id === myPeerId;
+            const pName = cleanPlayerName(p.name);
+            const wonTricks = (p.wonCards && Array.isArray(p.wonCards[0])) ? p.wonCards.length : (p.wonCards?.length ? 1 : 0);
+            opt.textContent = `${isMe ? 'You' : pName} (${wonTricks}T, ${p.points || 0} pts)`;
+            if (p.id === player.id) opt.selected = true;
+            selectEl.appendChild(opt);
+        });
+        selectEl.onchange = () => {
+            const chosen = (gameState.players || []).find(p => p.id === selectEl.value);
+            if (chosen) openWonCardsModal(chosen);
+        };
+    }
+
+    const wonList = player.wonCards || [];
+    const is2D = wonList.length > 0 && Array.isArray(wonList[0]);
+    const tricks = is2D ? wonList : (wonList.length > 0 ? [wonList] : []);
+
+    title.textContent = `Won Cards `;
     list.innerHTML = '';
 
-    if (!player.wonCards || player.wonCards.length === 0) {
-        list.innerHTML = '<p style="color: #aaa; margin: auto;">No tricks won yet.</p>';
+    if (!tricks || tricks.length === 0) {
+        list.innerHTML = '<p style="color: #aaa; margin: auto; padding: 24px 0;">No tricks won yet.</p>';
     } else {
-        player.wonCards.forEach(card => {
-            const cardEl = createCardElement(card, false);
-            cardEl.style.cursor = 'default';
-            list.appendChild(cardEl);
+        tricks.forEach((trick, idx) => {
+            const trickCards = Array.isArray(trick) ? trick : [trick];
+            const trickNum = trickCards[0]?.trickNumber || (idx + 1);
+            const trickPts = trickCards.reduce((s, c) => s + (typeof getCardPoints === 'function' ? getCardPoints(c) : 0), 0);
+
+            const rowContainer = document.createElement('div');
+            rowContainer.className = 'trick-row-container';
+
+            const headerEl = document.createElement('div');
+            headerEl.className = 'trick-row-header';
+            headerEl.innerHTML = `
+                <span class="trick-badge">Trick #${escapeHtml(trickNum)}</span>
+                <span class="trick-points-label">+${escapeHtml(trickPts)} pts</span>
+            `;
+            rowContainer.appendChild(headerEl);
+
+            const cardsRow = document.createElement('div');
+            cardsRow.className = 'trick-cards-row';
+
+            trickCards.forEach(card => {
+                const cardEl = createCardElement(card);
+                cardEl.style.cursor = 'default';
+                if (card.isWinningCard) {
+                    cardEl.classList.add('is-winning-trick-card');
+                }
+
+                const playerObj = (gameState.players || []).find(p => p.id === card.playedBy) ||
+                                  (gameState.spectators || []).find(s => s.id === card.playedBy);
+                const playedByName = playerObj ? cleanPlayerName(playerObj.name) : '';
+
+                if (playedByName) {
+                    const unit = document.createElement('div');
+                    unit.className = 'trick-card-unit';
+                    unit.appendChild(cardEl);
+
+                    const nameLabel = document.createElement('span');
+                    nameLabel.className = 'trick-card-player';
+                    nameLabel.title = playedByName;
+                    nameLabel.textContent = playedByName;
+                    unit.appendChild(nameLabel);
+
+                    cardsRow.appendChild(unit);
+                } else {
+                    cardsRow.appendChild(cardEl);
+                }
+            });
+
+            rowContainer.appendChild(cardsRow);
+            list.appendChild(rowContainer);
         });
     }
-    modal.style.display = 'block';
+    modal.style.display = 'flex';
     document.getElementById('won-cards-modal-backdrop').style.display = 'block';
 }
 
@@ -1146,6 +1285,7 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', guarded
         gameState.isPaused = false;
         gameState.pausedRemaining = null;
         gameState.draftTrump = null;
+        gameState.biddingStartedAt = null;
 
         cpuBidPlans = {};
         cpuTrumpPlan = null;
@@ -1160,6 +1300,11 @@ document.getElementById('bidAmount').addEventListener('input', () => {
 });
 
 function validateBidInput(raw) {
+    if (typeof updateMinBid === 'function' && gameState && Array.isArray(gameState.players)) {
+        updateMinBid(gameState.players.length);
+    } else if (gameState && typeof gameState.minBid === 'number') {
+        MIN_BID = gameState.minBid;
+    }
     const amt = Number(raw);
     if (!Number.isInteger(amt) || amt % 5 !== 0) return "Bid must be a whole number, a multiple of 5.";
     if (amt < MIN_BID || amt > MAX_BID) return `Bid must be between ${MIN_BID} and ${MAX_BID}.`;
@@ -1232,7 +1377,7 @@ document.getElementById('toggleAiBtn')?.addEventListener('click', guarded('toggl
     if (!me || me.isCPU) return;
     if (isHost) {
         me.isAutoPlay = !me.isAutoPlay;
-        broadcastState();
+        renderGameBoard();
     } else {
         sendToHost({ type: 'ACTION_TOGGLE_AI' });
     }
@@ -1296,16 +1441,361 @@ document.getElementById('hostSaveBtn')?.addEventListener('click', () => { saveGa
 document.getElementById('hostLoadInput')?.addEventListener('change', guarded('loadGame', (e) => { loadGame(e); closeHostMenu(); }));
 
 let lastIsMobile = window.innerWidth <= 860;
+let resizeDebounceTimer = null;
 window.addEventListener('resize', () => {
     const nowMobile = window.innerWidth <= 860;
-    if (nowMobile !== lastIsMobile) {
-        lastIsMobile = nowMobile;
-        if (gameState.phase !== 'LOBBY' && document.getElementById('view-game').style.display !== 'none') {
+    const modeChanged = nowMobile !== lastIsMobile;
+    lastIsMobile = nowMobile;
+
+    if (gameState.phase !== 'LOBBY' && document.getElementById('view-game').style.display !== 'none') {
+        clearTimeout(resizeDebounceTimer);
+        resizeDebounceTimer = setTimeout(() => {
             try {
                 renderGameBoard();
             } catch (e) {
                 console.error('[ui] renderGameBoard failed on resize:', e);
             }
-        }
+        }, modeChanged ? 0 : 80);
     }
 });
+
+// --- Trick History Modal ---
+function openTrickHistoryModal() {
+    const modal = document.getElementById('trick-history-modal');
+    const title = document.getElementById('trick-history-title');
+    const list = document.getElementById('trick-history-list');
+
+    const tricks = typeof getReconstructedTrickHistory === 'function' ? getReconstructedTrickHistory(gameState) : [];
+    title.textContent = `📜 Trick History (${tricks.length} trick${tricks.length !== 1 ? 's' : ''})`;
+    list.innerHTML = '';
+
+    if (tricks.length === 0) {
+        list.innerHTML = '<p style="color: #aaa; margin: auto; padding: 24px 0;">No tricks completed yet this round.</p>';
+    } else {
+        tricks.forEach(trick => {
+            const rowContainer = document.createElement('div');
+            rowContainer.className = 'trick-row-container';
+
+            const winnerDisplayName = cleanPlayerName(trick.winnerName);
+            const headerEl = document.createElement('div');
+            headerEl.className = 'trick-row-header';
+            headerEl.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="trick-badge">Trick #${escapeHtml(trick.trickNumber)}</span>
+                    <span class="trick-winner-label">🏆 ${escapeHtml(winnerDisplayName)}</span>
+                </div>
+                <span class="trick-points-label">+${escapeHtml(trick.points)} pts</span>
+            `;
+            rowContainer.appendChild(headerEl);
+
+            const cardsRow = document.createElement('div');
+            cardsRow.className = 'trick-cards-row';
+
+            trick.cards.forEach(card => {
+                const cardEl = createCardElement(card);
+                cardEl.style.cursor = 'default';
+                if (card.isWinningCard) {
+                    cardEl.classList.add('is-winning-trick-card');
+                }
+
+                const playerObj = (gameState.players || []).find(p => p.id === card.playedBy) ||
+                                  (gameState.spectators || []).find(s => s.id === card.playedBy);
+                const playedByName = playerObj ? cleanPlayerName(playerObj.name) : 'Player';
+
+                const unit = document.createElement('div');
+                unit.className = 'trick-card-unit';
+                unit.appendChild(cardEl);
+
+                const nameLabel = document.createElement('span');
+                nameLabel.className = 'trick-card-player';
+                nameLabel.title = playedByName;
+                nameLabel.textContent = playedByName;
+                unit.appendChild(nameLabel);
+
+                cardsRow.appendChild(unit);
+            });
+
+            rowContainer.appendChild(cardsRow);
+            list.appendChild(rowContainer);
+        });
+    }
+
+    modal.style.display = 'flex';
+    document.getElementById('trick-history-modal-backdrop').style.display = 'block';
+}
+
+function closeTrickHistoryModal() {
+    document.getElementById('trick-history-modal').style.display = 'none';
+    document.getElementById('trick-history-modal-backdrop').style.display = 'none';
+}
+
+// --- In-Game Chat & Emoji Reactions ---
+let chatMessages = [];
+let unreadChatCount = 0;
+let isChatOpen = false;
+
+function openChatModal() {
+    isChatOpen = true;
+    unreadChatCount = 0;
+    updateChatUnreadBadge();
+    document.getElementById('chat-modal').style.display = 'flex';
+    document.getElementById('chat-modal-backdrop').style.display = 'block';
+    const container = document.getElementById('chat-messages-container');
+    if (container) container.scrollTop = container.scrollHeight;
+    const input = document.getElementById('chatInput');
+    if (input) input.focus();
+}
+
+function closeChatModal() {
+    isChatOpen = false;
+    document.getElementById('chat-modal').style.display = 'none';
+    document.getElementById('chat-modal-backdrop').style.display = 'none';
+    const popover = document.getElementById('emoji-picker-popover');
+    if (popover) popover.style.display = 'none';
+}
+
+function updateChatUnreadBadge() {
+    const badge = document.getElementById('chatUnreadBadge');
+    const pauseBadge = document.getElementById('pauseChatBadge');
+    const lobbyBadge = document.getElementById('lobbyChatBadge');
+    const badgeText = unreadChatCount > 9 ? '9+' : unreadChatCount;
+    const shouldShow = unreadChatCount > 0 && !isChatOpen;
+
+    if (badge) {
+        if (shouldShow) {
+            badge.textContent = badgeText;
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+    if (pauseBadge) {
+        if (shouldShow) {
+            pauseBadge.textContent = badgeText;
+            pauseBadge.style.display = 'inline-flex';
+        } else {
+            pauseBadge.style.display = 'none';
+        }
+    }
+    if (lobbyBadge) {
+        if (shouldShow) {
+            lobbyBadge.textContent = badgeText;
+            lobbyBadge.style.display = 'inline-flex';
+        } else {
+            lobbyBadge.style.display = 'none';
+        }
+    }
+}
+
+const MAX_CHAT_HISTORY = 100;
+
+function appendChatMessageToUI(msg) {
+    const container = document.getElementById('chat-messages-container');
+    if (!container) return;
+
+    while (container.children.length >= MAX_CHAT_HISTORY) {
+        container.firstElementChild.remove();
+    }
+
+    const isMe = msg.senderId === myPeerId;
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${isMe ? 'is-me' : 'is-other'}`;
+
+    const author = document.createElement('div');
+    author.className = 'chat-sender-name';
+    author.textContent = isMe ? 'You' : cleanPlayerName(msg.senderName);
+    bubble.appendChild(author);
+
+    const text = document.createElement('div');
+    text.className = 'chat-text';
+    text.textContent = msg.text;
+    bubble.appendChild(text);
+
+    const time = document.createElement('div');
+    time.className = 'chat-time';
+    const d = new Date(msg.time || Date.now());
+    time.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    bubble.appendChild(time);
+
+    container.appendChild(bubble);
+    container.scrollTop = container.scrollHeight;
+}
+
+function handleIncomingChatMessage(payload) {
+    if (!payload || !payload.text) return;
+    chatMessages.push(payload);
+    if (chatMessages.length > MAX_CHAT_HISTORY) chatMessages.shift();
+
+    appendChatMessageToUI(payload);
+
+    if (!isChatOpen) {
+        unreadChatCount++;
+        updateChatUnreadBadge();
+    }
+}
+
+function handleIncomingEmojiReaction(payload) {
+    if (!payload || !payload.emoji) return;
+    triggerFloatingEmoji(payload.emoji, payload.senderName);
+}
+
+function triggerFloatingEmoji(emoji, senderName) {
+    const container = document.getElementById('floating-emojis-container');
+    if (!container) return;
+
+    while (container.children.length >= 15) {
+        container.firstElementChild.remove();
+    }
+
+    const el = document.createElement('div');
+    el.className = 'floating-reaction';
+    const leftPercent = 15 + Math.random() * 65;
+    el.style.left = `${leftPercent}%`;
+
+    const emojiSpan = document.createElement('span');
+    emojiSpan.className = 'reaction-emoji';
+    emojiSpan.textContent = emoji;
+
+    const senderSpan = document.createElement('span');
+    senderSpan.className = 'reaction-sender';
+    senderSpan.textContent = cleanPlayerName(senderName || 'Player');
+
+    el.appendChild(emojiSpan);
+    el.appendChild(senderSpan);
+
+    container.appendChild(el);
+
+    el.addEventListener('animationend', () => {
+        el.remove();
+    });
+    setTimeout(() => {
+        if (el.parentNode) el.remove();
+    }, 3200);
+}
+
+function submitChatMessage() {
+    const input = document.getElementById('chatInput');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    const popover = document.getElementById('emoji-picker-popover');
+    if (popover) popover.style.display = 'none';
+    if (typeof sendChatMessage === 'function') {
+        sendChatMessage(text);
+    }
+}
+
+function initChatAndEmojiPicker() {
+    const popover = document.getElementById('emoji-picker-popover');
+    const customPicker = document.querySelector('emoji-picker');
+    const fallbackContainer = document.getElementById('emoji-picker-fallback');
+
+    if (customPicker) {
+        customPicker.addEventListener('emoji-click', (event) => {
+            const emoji = event.detail.unicode;
+            const input = document.getElementById('chatInput');
+            if (input && emoji) {
+                input.value += emoji;
+                input.focus();
+            }
+        });
+    }
+
+    const CATEGORIZED_EMOJIS = {
+        'Smileys': ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','😎','🤓','🧐','😕','😟','🙁','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','☠️','💩','🤡','👹','👺','👻','👽','🤖'],
+        'Gestures': ['👋','🤚','🖐️','✋','🖖','👌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','👐','🤲','🤝','🙏','✍️','💪','🧠','👀','👁️','👂','👃','👅','👄'],
+        'Fun & Games': ['♠️','♥️','♦️','♣️','🃏','🎴','🎲','🎯','🏆','🥇','🥈','🥉','👑','💎','🔥','✨','🎉','🎊','🎈','💣','💥','⚡','🚀','💯','⭐','🌟','💤','💰','💸','🎵','🎶','🎸','🎺','🥁'],
+        'Animals': ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🦟','🕷️','🦂','🐢','🐍','🦎','🦖','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','🦈','🐊'],
+        'Food & Drink': ['🍏','🍎','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🌶️','🌽','🥕','🥔','🥐','🍞','🥖','🥨','🧀','🍳','🥞','🧇','🥓','🍗','🍖','🌭','🍔','🍟','🍕','🌮','🌯','🥗','🍝','🍜','🍲','🍣','🍱','🥟','🍧','🍨','🍦','🍰','🎂','🍫','🍿','🍩','🍪','☕','🍺','🍻','🥂','🍷','🥃']
+    };
+
+    function populateFallbackEmojis() {
+        if (!fallbackContainer || fallbackContainer.children.length > 0) return;
+        Object.entries(CATEGORIZED_EMOJIS).forEach(([category, emojis]) => {
+            const catTitle = document.createElement('div');
+            catTitle.className = 'emoji-category-title';
+            catTitle.textContent = category;
+            fallbackContainer.appendChild(catTitle);
+
+            const grid = document.createElement('div');
+            grid.className = 'emoji-category-grid';
+            emojis.forEach(emoji => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'emoji-item';
+                btn.textContent = emoji;
+                btn.addEventListener('click', () => {
+                    const input = document.getElementById('chatInput');
+                    if (input) {
+                        input.value += emoji;
+                        input.focus();
+                    }
+                });
+                grid.appendChild(btn);
+            });
+            fallbackContainer.appendChild(grid);
+        });
+    }
+
+    document.getElementById('chatEmojiToggleBtn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!popover) return;
+        const isOpen = popover.style.display === 'block';
+        if (isOpen) {
+            popover.style.display = 'none';
+        } else {
+            popover.style.display = 'block';
+            if (!customElements.get('emoji-picker')) {
+                if (customPicker) customPicker.style.display = 'none';
+                if (fallbackContainer) {
+                    populateFallbackEmojis();
+                    fallbackContainer.style.display = 'block';
+                }
+            } else {
+                if (customPicker) customPicker.style.display = 'block';
+                if (fallbackContainer) fallbackContainer.style.display = 'none';
+            }
+        }
+    });
+
+    document.getElementById('chat-messages-container')?.addEventListener('click', () => {
+        if (popover) popover.style.display = 'none';
+    });
+
+    document.getElementById('chatSendBtn')?.addEventListener('click', submitChatMessage);
+    document.getElementById('chatInput')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            submitChatMessage();
+        }
+    });
+
+    // Quick reaction buttons
+    document.querySelectorAll('.quick-reaction-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const emoji = btn.dataset.emoji || btn.textContent.trim();
+            if (typeof sendEmojiReaction === 'function') {
+                sendEmojiReaction(emoji);
+            }
+        });
+    });
+
+    // Close buttons & backdrops
+    document.getElementById('closeChatBtn')?.addEventListener('click', closeChatModal);
+    document.getElementById('chat-modal-backdrop')?.addEventListener('click', closeChatModal);
+
+    document.getElementById('closeTrickHistoryBtn')?.addEventListener('click', closeTrickHistoryModal);
+    document.getElementById('trick-history-modal-backdrop')?.addEventListener('click', closeTrickHistoryModal);
+
+    // Pause & Lobby chat action buttons
+    document.getElementById('lobbyChatBtn')?.addEventListener('click', openChatModal);
+    document.getElementById('pauseChatBtn')?.addEventListener('click', openChatModal);
+    document.getElementById('pauseHistoryBtn')?.addEventListener('click', openTrickHistoryModal);
+    document.getElementById('pauseWonCardsBtn')?.addEventListener('click', () => {
+        const me = (gameState.players || []).find(p => p.id === myPeerId);
+        openWonCardsModal(me || gameState.players?.[0]);
+    });
+}
+
+initChatAndEmojiPicker();

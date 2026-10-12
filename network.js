@@ -6,12 +6,21 @@ let connections = {};
 let hostConnection = null;
 let lastSeen = {};
 let actionTimestamps = {};
+let chatTimestamps = {};
+let reactionTimestamps = {};
+let lastClientChatTime = 0;
+let clientChatHistory = [];
+let lastClientReactionTime = 0;
 let pendingPromotionTarget = null;
 
 const HEARTBEAT_INTERVAL_MS = 4000;
-const HEARTBEAT_STALE_MS = 10000;
+const HEARTBEAT_STALE_MS = 15000;
 const RATE_LIMIT_WINDOW_MS = 2000;
 const RATE_LIMIT_MAX_ACTIONS = 10;
+const CHAT_RATE_LIMIT_WINDOW_MS = 5000;
+const CHAT_RATE_LIMIT_MAX_MSGS = 5;
+const CHAT_MIN_INTERVAL_MS = 400;
+const REACTION_MIN_INTERVAL_MS = 400;
 
 function broadcastState() {
     if (!isHost) return;
@@ -81,6 +90,8 @@ function kickPlayer(targetId) {
     }
     delete lastSeen[targetId];
     delete actionTimestamps[targetId];
+    delete chatTimestamps[targetId];
+    delete reactionTimestamps[targetId];
     gameState.players = gameState.players.filter(p => p.id !== targetId);
     gameState.spectators = (gameState.spectators || []).filter(s => s.id !== targetId);
     gameState.excludedIds = (gameState.excludedIds || []).filter(id => id !== targetId);
@@ -93,9 +104,13 @@ function kickPlayer(targetId) {
 
 function markDisconnected(peerId) {
     if (!isHost) return;
-    delete connections[peerId];
+    if (!connections[peerId] || !connections[peerId].open) {
+        delete connections[peerId];
+    }
     delete lastSeen[peerId];
     delete actionTimestamps[peerId];
+    delete chatTimestamps[peerId];
+    delete reactionTimestamps[peerId];
     if (pendingPromotionTarget === peerId) pendingPromotionTarget = null;
 
     const known = gameState.players.some(p => p.id === peerId) ||
@@ -135,9 +150,34 @@ function isRateLimited(peerId) {
     return false;
 }
 
+function isChatRateLimited(peerId) {
+    const now = Date.now();
+    let stamps = chatTimestamps[peerId];
+    if (!stamps) { stamps = []; chatTimestamps[peerId] = stamps; }
+    if (stamps.length > 0 && now - stamps[stamps.length - 1] < CHAT_MIN_INTERVAL_MS) {
+        return true;
+    }
+    while (stamps.length && now - stamps[0] > CHAT_RATE_LIMIT_WINDOW_MS) stamps.shift();
+    if (stamps.length >= CHAT_RATE_LIMIT_MAX_MSGS) return true;
+    stamps.push(now);
+    return false;
+}
+
+function isReactionRateLimited(peerId) {
+    const now = Date.now();
+    const last = reactionTimestamps[peerId] || 0;
+    if (now - last < REACTION_MIN_INTERVAL_MS) return true;
+    reactionTimestamps[peerId] = now;
+    return false;
+}
+
 let leaveSent = false;
-function sendLeaveNotice() {
-    if (isHost || leaveSent || !hostConnection) return;
+function sendLeaveNoticeAndHostControl() {
+    if (isHost) {
+        emergencyHostTransfer();
+        return;
+    }
+    if (leaveSent || !hostConnection) return;
     leaveSent = true;
     try {
         hostConnection.send({ type: 'LEAVE' });
@@ -145,7 +185,7 @@ function sendLeaveNotice() {
         console.warn('[network] Could not send the LEAVE notice:', e);
     }
 }
-window.addEventListener('pagehide', sendLeaveNotice);
+window.addEventListener('pagehide', sendLeaveNoticeAndHostControl);
 
 setInterval(() => {
     if (isHost || !hostConnection) return;
@@ -195,7 +235,13 @@ function reassignMemberId(oldId, newId) {
 
     gameState.players.forEach(p => {
         if (p.id === oldId) p.id = newId;
-        (p.wonCards || []).forEach(c => { if (c.playedBy === oldId) c.playedBy = newId; });
+        (p.wonCards || []).forEach(c => {
+            if (Array.isArray(c)) {
+                c.forEach(x => { if (x.playedBy === oldId) x.playedBy = newId; });
+            } else if (c && c.playedBy === oldId) {
+                c.playedBy = newId;
+            }
+        });
     });
     (gameState.spectators || []).forEach(sp => { if (sp.id === oldId) sp.id = newId; });
     (gameState.board || []).forEach(c => { if (c.playedBy === oldId) c.playedBy = newId; });
@@ -208,6 +254,8 @@ function reassignMemberId(oldId, newId) {
 
     delete lastSeen[oldId];
     delete actionTimestamps[oldId];
+    delete chatTimestamps[oldId];
+    delete reactionTimestamps[oldId];
 }
 
 function notifyPeer(conn, message) {
@@ -227,6 +275,7 @@ function evictConnection(id, message) {
 }
 
 function attachHostConnectionHandler() {
+    if (!peer) return;
     if (typeof peer.removeAllListeners === 'function') peer.removeAllListeners('connection');
 
     peer.on('connection', (conn) => {
@@ -253,6 +302,7 @@ function attachHostConnectionHandler() {
         conn.on('close', () => {
             try {
                 if (connections[conn.peer] && connections[conn.peer] !== conn) return;
+                delete connections[conn.peer];
                 markDisconnected(conn.peer);
             } catch (e) {
                 console.error('[network] Error while handling a closed connection:', e);
@@ -266,8 +316,20 @@ function attachHostConnectionHandler() {
         conn.on('data', (data) => {
           try {
             if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
+            connections[conn.peer] = conn;
             lastSeen[conn.peer] = Date.now();
-            if (data.type === 'PING') return;
+
+            let wasDisconnected = false;
+            if (gameState.disconnectedIds && gameState.disconnectedIds.includes(conn.peer)) {
+                gameState.disconnectedIds = gameState.disconnectedIds.filter(id => id !== conn.peer);
+                if (gameState.disconnectedAt) delete gameState.disconnectedAt[conn.peer];
+                wasDisconnected = true;
+            }
+
+            if (data.type === 'PING') {
+                if (wasDisconnected) broadcastState();
+                return;
+            }
             if (data.type && data.type.indexOf('ACTION_') === 0 && isRateLimited(conn.peer)) return;
 
             if (data.type === 'LEAVE') { markDisconnected(conn.peer); return; }
@@ -384,6 +446,72 @@ function attachHostConnectionHandler() {
             if (data.type === 'ACTION_FOLD') { handleFold(conn.peer); broadcastState(); }
             if (data.type === 'ACTION_SET_TRUMP') { handleSetTrump(conn.peer, data.suit, data.cards); broadcastState(); }
             if (data.type === 'ACTION_PLAY_CARD') { handlePlayCard(conn.peer, data.card); broadcastState(); }
+            if (data.type === 'ACTION_TOGGLE_AI') {
+                const p = gameState.players.find(pl => pl.id === conn.peer);
+                if (p && !p.isCPU) {
+                    p.isAutoPlay = !p.isAutoPlay;
+                    try {
+                        const safeState = getSanitizedStateForClient(conn.peer);
+                        const clientPlayers = safeState.players.map(pl =>
+                            pl.id === conn.peer ? { ...pl, hand: p.hand } : pl
+                        );
+                        conn.send({ type: 'STATE_UPDATE', state: { ...safeState, players: clientPlayers } });
+                    } catch (e) {
+                        console.warn('[network] Failed to send updated autoplay state to ' + conn.peer + ':', e);
+                    }
+                }
+            }
+            if (data.type === 'ACTION_PARTIAL_TRUMP') {
+                if (gameState.highestBid.playerId === conn.peer && gameState.phase === 'TRUMP_SELECTION') {
+                    gameState.draftTrump = { suit: data.suit, cards: Array.isArray(data.cards) ? data.cards : [] };
+                }
+            }
+            if (data.type === 'CHAT_MSG') {
+                if (isChatRateLimited(conn.peer)) {
+                    console.warn('[network] Rate limited CHAT_MSG from ' + conn.peer);
+                    return;
+                }
+                if (typeof data.text === 'string' && data.text.trim()) {
+                    const cleanText = data.text.trim().slice(0, 150);
+                    const sender = gameState.players.find(p => p.id === conn.peer) || (gameState.spectators || []).find(s => s.id === conn.peer);
+                    const senderName = sender ? sender.name : (data.senderName || 'Player');
+                    const chatPayload = {
+                        type: 'CHAT_BROADCAST',
+                        senderId: conn.peer,
+                        senderName: senderName,
+                        text: cleanText,
+                        time: Date.now()
+                    };
+                    if (typeof handleIncomingChatMessage === 'function') handleIncomingChatMessage(chatPayload);
+                    Object.values(connections).forEach(c => {
+                        try { if (c.open) c.send(chatPayload); } catch (e) {
+                            console.warn('[network] Failed to relay CHAT_BROADCAST to ' + c.peer + ':', e);
+                        }
+                    });
+                }
+            }
+            if (data.type === 'EMOJI_REACTION') {
+                if (isReactionRateLimited(conn.peer)) {
+                    console.warn('[network] Rate limited EMOJI_REACTION from ' + conn.peer);
+                    return;
+                }
+                if (typeof data.emoji === 'string') {
+                    const sender = gameState.players.find(p => p.id === conn.peer) || (gameState.spectators || []).find(s => s.id === conn.peer);
+                    const senderName = sender ? sender.name : (data.senderName || 'Player');
+                    const reactionPayload = {
+                        type: 'EMOJI_REACTION_BROADCAST',
+                        senderId: conn.peer,
+                        senderName: senderName,
+                        emoji: data.emoji
+                    };
+                    if (typeof handleIncomingEmojiReaction === 'function') handleIncomingEmojiReaction(reactionPayload);
+                    Object.values(connections).forEach(c => {
+                        try { if (c.open) c.send(reactionPayload); } catch (e) {
+                            console.warn('[network] Failed to relay EMOJI_REACTION_BROADCAST to ' + c.peer + ':', e);
+                        }
+                    });
+                }
+            }
 
             if (data.type === 'PROMOTION_READY') {
                 if (conn.peer !== pendingPromotionTarget) return;
@@ -431,7 +559,10 @@ function updateRoomIdDisplay(id) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
     
-    display.innerHTML = `Room ID: <b style="letter-spacing: 1px;">${safeId}</b> <button id="copyRoomIdBtn" style="margin-left: 12px; padding: 4px 10px; font-size: 12px;" class="btn-ghost" title="Copy Room ID"> 📋 </button>`;
+    const isOffline = safeId === '000000';
+    const tag = isOffline ? ' <span style="font-size: 11px; font-weight: 700; color: var(--brass-300); margin-left: 6px; padding: 2px 8px; background: rgba(201,162,77,0.18); border-radius: 999px; border: 1px solid rgba(201,162,77,0.4);">Offline Mode</span>' : '';
+
+    display.innerHTML = `Room ID: <b style="letter-spacing: 1px;">${safeId}</b>${tag} <button id="copyRoomIdBtn" style="margin-left: 12px; padding: 4px 10px; font-size: 12px;" class="btn-ghost" title="Copy Room ID"> 📋 </button>`;
     
     const copyBtn = document.getElementById('copyRoomIdBtn');
     if (copyBtn) {
@@ -477,6 +608,90 @@ function promoteToHost(targetId) {
         pendingPromotionTarget = null;
         alert("Could not hand over hosting. Please try again.");
     }
+}
+
+let hostTransferDone = false;
+function emergencyHostTransfer() {
+    if (!isHost || hostTransferDone) return;
+
+    const activeHumans = (gameState.players || []).filter(p => !p.isCPU && p.id !== myPeerId && !isDisconnected(p.id) && connections[p.id] && connections[p.id].open);
+    const specHumans = (gameState.spectators || []).filter(s => !s.isCPU && s.id !== myPeerId && !isDisconnected(s.id) && connections[s.id] && connections[s.id].open);
+    const candidates = activeHumans.length > 0 ? activeHumans : specHumans;
+
+    if (candidates.length === 0) return;
+
+    hostTransferDone = true;
+
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    const newHostId = chosen.id;
+
+    if (gameState.phase !== 'LOBBY') {
+        gameState.phase = 'LOBBY';
+        gameState.deck = [];
+        gameState.board = [];
+        gameState.highestBid = { playerId: null, amount: 0, playerName: "" };
+        gameState.trumpSuit = null;
+        gameState.calledCards = [];
+        gameState.originalCalledCards = [];
+        gameState.biddingDeadline = null;
+        gameState.turnDeadline = null;
+        gameState.trumpSelectionDeadline = null;
+        gameState.isPaused = false;
+        gameState.pausedRemaining = null;
+        gameState.excludedIds = (gameState.spectators || []).map(sp => sp.id);
+        gameState.players.forEach(p => {
+            p.hand = [];
+            p.wonCards = [];
+            p.points = 0;
+            p.currentBid = 0;
+            p.hasFolded = false;
+            p.team = 'UNKNOWN';
+            p.isAutoPlay = false;
+        });
+    }
+
+    gameState.players = gameState.players.filter(p => p.id !== myPeerId);
+    gameState.spectators = (gameState.spectators || []).filter(s => s.id !== myPeerId);
+    gameState.excludedIds = (gameState.excludedIds || []).filter(id => id !== myPeerId);
+    gameState.lobbyOrder = (gameState.lobbyOrder || []).filter(id => id !== myPeerId);
+    gameState.disconnectedIds = (gameState.disconnectedIds || []).filter(id => id !== myPeerId);
+
+    const targetPlayer = gameState.players.find(p => p.id === newHostId);
+    if (targetPlayer) {
+        targetPlayer.name = targetPlayer.name.replace(/\s*\((Host|H)\)\s*/gi, '').trim() + ' (Host)';
+    } else {
+        const targetSpec = (gameState.spectators || []).find(s => s.id === newHostId);
+        if (targetSpec) {
+            targetSpec.name = targetSpec.name.replace(/\s*\((Host|H|Spectator)\)\s*/gi, '').trim() + ' (Host)';
+        }
+    }
+
+    try {
+        if (connections[newHostId] && connections[newHostId].open) {
+            connections[newHostId].send({
+                type: 'PROMOTE_TO_HOST',
+                state: gameState,
+                gameStats: statsForWire(),
+                playerData: playerData
+            });
+        }
+    } catch (e) {
+        console.warn('[network] emergencyHostTransfer failed to send to new host:', e);
+    }
+
+    Object.keys(connections).forEach(id => {
+        if (id !== newHostId) {
+            try {
+                if (connections[id] && connections[id].open) {
+                    connections[id].send({ type: 'HOST_MIGRATED', newHostId: newHostId });
+                }
+            } catch (e) {
+                console.warn('[network] emergencyHostTransfer failed to notify ' + id + ':', e);
+            }
+        }
+    });
+
+    isHost = false;
 }
 
 function connectToHost(targetId, onFirstJoin) {
@@ -533,6 +748,11 @@ function connectToHost(targetId, onFirstJoin) {
                     return;
                 }
                 gameState = data.state;
+                if (typeof updateMinBid === 'function') {
+                    updateMinBid(gameState.players.length);
+                } else if (typeof gameState.minBid === 'number') {
+                    MIN_BID = gameState.minBid;
+                }
                 renderState();
             }
             if (data.type === 'GAME_STATS_UPDATE') {
@@ -555,11 +775,16 @@ function connectToHost(targetId, onFirstJoin) {
                     return;
                 }
                 gameState = data.state;
+                if (typeof updateMinBid === 'function') {
+                    updateMinBid(gameState.players.length);
+                }
                 gameStats = toStatsMap(data.gameStats);
                 playerData = data.playerData || [];
                 connections = {};
                 lastSeen = {};
                 actionTimestamps = {};
+                chatTimestamps = {};
+                reactionTimestamps = {};
                 attachHostConnectionHandler();
                 isHost = true;
                 leaveSent = false;
@@ -577,6 +802,12 @@ function connectToHost(targetId, onFirstJoin) {
             }
             if (data.type === 'HOST_MIGRATED') {
                 connectToHost(data.newHostId);
+            }
+            if (data.type === 'CHAT_BROADCAST') {
+                if (typeof handleIncomingChatMessage === 'function') handleIncomingChatMessage(data);
+            }
+            if (data.type === 'EMOJI_REACTION_BROADCAST') {
+                if (typeof handleIncomingEmojiReaction === 'function') handleIncomingEmojiReaction(data);
             }
         } catch (e) {
             console.error('[network] Error while handling "' + (data && data.type) + '" from the host:', e);
@@ -599,9 +830,56 @@ function resetPeer() {
     peer = null;
     myPeerId = null;
     isHost = false;
+    hostTransferDone = false;
+    gameState.players = [];
+    gameState.spectators = [];
+    chatTimestamps = {};
+    reactionTimestamps = {};
+    lastClientChatTime = 0;
+    clientChatHistory = [];
+    lastClientReactionTime = 0;
 }
 
-function attachPeerErrorHandlers(p) {
+function startOfflineRoom(nameInput) {
+    if (peer && !peer.destroyed) {
+        try { peer.destroy(); } catch (e) {
+            console.warn('[network] startOfflineRoom: error destroying previous peer:', e);
+        }
+    }
+    resetPeer();
+
+    const raw = (nameInput || document.getElementById('playerName')?.value || 'Player').trim();
+    const cleanName = sanitizeName(raw) || 'Player';
+
+    myName = cleanName + " (Host)";
+    myPeerId = "000000";
+    isHost = true;
+    peer = null;
+    connections = {};
+    hostTransferDone = false;
+
+    gameState.players = [];
+    gameState.spectators = [];
+    gameState.excludedIds = [];
+    gameState.lobbyOrder = [];
+    gameState.disconnectedIds = [];
+    gameState.phase = 'LOBBY';
+
+    gameState.players.push({
+        id: myPeerId,
+        name: myName,
+        hand: [],
+        wonCards: [],
+        points: 0,
+        currentBid: 0,
+        team: 'UNKNOWN'
+    });
+
+    updateRoomIdDisplay("000000");
+    renderState();
+}
+
+function attachPeerErrorHandlers(p, fallbackName) {
     p.on('error', (err) => {
         console.error('[network] PeerJS error (' + (err && err.type) + '):', err);
         const type = err && err.type;
@@ -609,8 +887,12 @@ function attachPeerErrorHandlers(p) {
             alert('That room could not be found. Check the Room ID and make sure the host is still online.');
             resetPeer();
         } else if (!myPeerId && p === peer) {
-            alert('Could not connect to the game server (' + (type || 'unknown error') + '). Please try again.');
-            resetPeer();
+            if (fallbackName && confirm('Could not connect to online multiplayer server (' + (type || 'offline') + '). Would you like to create an offline room (000000) to play with bots?')) {
+                startOfflineRoom(fallbackName);
+            } else {
+                alert('Could not connect to the game server (' + (type || 'unknown error') + '). Please try again.');
+                resetPeer();
+            }
         }
     });
 
@@ -629,33 +911,51 @@ document.getElementById('hostBtn').addEventListener('click', () => {
     const nameInput = sanitizeName(document.getElementById('playerName').value);
     if (!nameInput) { alert("Please enter a valid name (max " + MAX_NAME_LENGTH + " characters; brackets and anything after them are removed)."); return; }
 
+    if (!navigator.onLine || typeof Peer === 'undefined') {
+        startOfflineRoom(nameInput);
+        return;
+    }
+
     myName = nameInput + " (Host)";
     try {
         peer = new Peer(iceConfig());
     } catch (e) {
-        console.error('[network] Could not create the peer (is PeerJS blocked or offline?):', e);
-        alert('Could not start the game networking. Check your connection and reload the page.');
-        peer = null;
+        console.warn('[network] Could not create peer, falling back to offline room:', e);
+        startOfflineRoom(nameInput);
         return;
     }
 
+    hostTransferDone = false;
+    gameState.players = [];
     gameState.spectators = [];
+    gameState.excludedIds = [];
+    gameState.lobbyOrder = [];
+    gameState.disconnectedIds = [];
+    gameState.phase = 'LOBBY';
 
     peer.on('open', (id) => {
         try {
             myPeerId = id;
             isHost = true;
-            gameState.players.push({ id: myPeerId, name: myName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
-
             updateRoomIdDisplay(id);
+
+            if (!gameState.players.some(p => p.id === id)) {
+                gameState.players.push({ id: myPeerId, name: myName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
+            }
+
             renderState();
         } catch (e) {
             console.error('[network] Error while opening the room:', e);
         }
     });
 
-    attachPeerErrorHandlers(peer);
+    attachPeerErrorHandlers(peer, nameInput);
     attachHostConnectionHandler();
+});
+
+document.getElementById('offlineBtn')?.addEventListener('click', () => {
+    const nameInput = document.getElementById('playerName')?.value;
+    startOfflineRoom(nameInput);
 });
 
 document.getElementById('joinBtn').addEventListener('click', () => {
@@ -664,6 +964,16 @@ document.getElementById('joinBtn').addEventListener('click', () => {
     const roomId = document.getElementById('joinId').value.trim();
 
     if (!nameInput || !roomId) { alert("Name and Room ID required."); return; }
+
+    if (/^0+$/.test(roomId)) {
+        startOfflineRoom(nameInput);
+        return;
+    }
+
+    if (!navigator.onLine || typeof Peer === 'undefined') {
+        alert('You are currently offline. To play with bots, enter Room ID 000000 or click Play Offline.');
+        return;
+    }
 
     myName = nameInput;
     try {
@@ -678,6 +988,7 @@ document.getElementById('joinBtn').addEventListener('click', () => {
     peer.on('open', (id) => {
         try {
             myPeerId = id;
+            if (hostConnection && hostConnection.open) return;
             connectToHost(roomId, () => {
                 try {
                     hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
@@ -695,3 +1006,67 @@ document.getElementById('joinBtn').addEventListener('click', () => {
 
     attachPeerErrorHandlers(peer);
 });
+
+function sendChatMessage(text) {
+    if (!text || typeof text !== 'string') return;
+    const cleanText = text.trim().slice(0, 150);
+    if (!cleanText) return;
+
+    const now = Date.now();
+    if (now - lastClientChatTime < CHAT_MIN_INTERVAL_MS) return;
+    clientChatHistory = clientChatHistory.filter(t => now - t < CHAT_RATE_LIMIT_WINDOW_MS);
+    if (clientChatHistory.length >= CHAT_RATE_LIMIT_MAX_MSGS) return;
+    clientChatHistory.push(now);
+    lastClientChatTime = now;
+
+    const sender = (gameState.players || []).find(p => p.id === myPeerId) || (gameState.spectators || []).find(s => s.id === myPeerId);
+    const senderName = sender ? sender.name : (myName || 'Me');
+    const chatPayload = {
+        type: 'CHAT_BROADCAST',
+        senderId: myPeerId || 'local',
+        senderName: senderName,
+        text: cleanText,
+        time: now
+    };
+    if (isHost) {
+        if (typeof handleIncomingChatMessage === 'function') handleIncomingChatMessage(chatPayload);
+        Object.values(connections).forEach(c => {
+            try { if (c.open) c.send(chatPayload); } catch (e) {
+                console.warn('[network] sendChatMessage: failed to send to ' + c.peer + ':', e);
+            }
+        });
+    } else if (hostConnection && hostConnection.open) {
+        hostConnection.send({ type: 'CHAT_MSG', text: cleanText, senderName: myName });
+    } else {
+        if (typeof handleIncomingChatMessage === 'function') handleIncomingChatMessage(chatPayload);
+    }
+}
+
+function sendEmojiReaction(emoji) {
+    if (!emoji || typeof emoji !== 'string') return;
+
+    const now = Date.now();
+    if (now - lastClientReactionTime < REACTION_MIN_INTERVAL_MS) return;
+    lastClientReactionTime = now;
+
+    const sender = (gameState.players || []).find(p => p.id === myPeerId) || (gameState.spectators || []).find(s => s.id === myPeerId);
+    const senderName = sender ? sender.name : (myName || 'Me');
+    const reactionPayload = {
+        type: 'EMOJI_REACTION_BROADCAST',
+        senderId: myPeerId || 'local',
+        senderName: senderName,
+        emoji: emoji
+    };
+    if (isHost) {
+        if (typeof handleIncomingEmojiReaction === 'function') handleIncomingEmojiReaction(reactionPayload);
+        Object.values(connections).forEach(c => {
+            try { if (c.open) c.send(reactionPayload); } catch (e) {
+                console.warn('[network] sendEmojiReaction: failed to send to ' + c.peer + ':', e);
+            }
+        });
+    } else if (hostConnection && hostConnection.open) {
+        hostConnection.send({ type: 'EMOJI_REACTION', emoji: emoji, senderName: myName });
+    } else {
+        if (typeof handleIncomingEmojiReaction === 'function') handleIncomingEmojiReaction(reactionPayload);
+    }
+}

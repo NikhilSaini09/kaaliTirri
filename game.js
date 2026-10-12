@@ -20,8 +20,18 @@ function sortHand(hand) {
     });
 }
 
-const MIN_BID = 130;
+let MIN_BID = 80;
 const MAX_BID = 250;
+
+function updateMinBid(numPlayers) {
+    if (numPlayers === 4) MIN_BID = 120;
+    else if (numPlayers > 4) MIN_BID = 140;
+    else MIN_BID = 80;
+    if (typeof gameState === 'object' && gameState) {
+        gameState.minBid = MIN_BID;
+    }
+    return MIN_BID;
+}
 const BIDDING_TIME_MS = 30000;
 const TRUMP_SELECTION_TIME_MS = 60000;
 const TURN_TIME_MS = 30000;
@@ -30,12 +40,12 @@ const RECONNECT_GRACE_MS = 10000;
 let gameState = {
     phase: 'LOBBY',       // LOBBY, BIDDING, TRUMP_SELECTION, PLAYING, TRICK_EVALUATION, GAMEOVER
     deck: [],
-    board: [],            
-    players: [],          
+    board: [],
+    players: [],
     dealerIndex: 0,       
-    turnIndex: 0,         
+    turnIndex: 0,
     highestBid: { playerId: null, amount: 0, playerName: "" },
-    trumpSuit: null,      
+    trumpSuit: null,
     calledCards: [],
     originalCalledCards: [],
     spectators: [],
@@ -47,7 +57,10 @@ let gameState = {
     turnDeadline: null,
     trumpSelectionDeadline: null,
     isPaused: false,
-    pausedRemaining: null
+    pausedRemaining: null,
+    draftTrump: null,
+    biddingStartedAt: null,
+    trickCount: 0
 };
 // Schema: { "Alice": { gamesPlayed: 3, wins: 2, losses: 1 }, ... }
 function toStatsMap(obj) {
@@ -89,10 +102,20 @@ function stripSpectatorTag(name) {
 }
 
 function getLobbyMembers() {
-    const members = [
-        ...gameState.players.map(p => ({ id: p.id, name: p.name, isCPU: !!p.isCPU })),
-        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU }))
-    ];
+    const seen = new Set();
+    const members = [];
+    for (const p of gameState.players) {
+        if (!seen.has(p.id)) {
+            seen.add(p.id);
+            members.push({ id: p.id, name: p.name, isCPU: !!p.isCPU });
+        }
+    }
+    for (const s of (gameState.spectators || [])) {
+        if (!seen.has(s.id)) {
+            seen.add(s.id);
+            members.push({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU });
+        }
+    }
     const order = gameState.lobbyOrder || [];
     const rank = id => { const i = order.indexOf(id); return i === -1 ? order.length : i; };
     return members.sort((a, b) => rank(a.id) - rank(b.id));
@@ -277,7 +300,7 @@ function evaluateTrick() {
         }
     }
 
-    if (gameState.players.some(p => p.isCPU) && typeof cpuObserveTrick === 'function') cpuObserveTrick(gameState, gameState.board, winningCard.playedBy);
+    if (gameState.players.some(p => p.isCPU || p.isAutoPlay) && typeof cpuObserveTrick === 'function') cpuObserveTrick(gameState, gameState.board, winningCard.playedBy);
     const trickPoints = gameState.board.reduce((sum, c) => sum + getCardPoints(c), 0);
     const winnerIndex = gameState.players.findIndex(p => p.id === winningCard.playedBy);
     if (winnerIndex === -1) {
@@ -286,8 +309,15 @@ function evaluateTrick() {
         return;
     }
 
+    gameState.trickCount = (gameState.trickCount || 0) + 1;
+    const trickCards = gameState.board.map(c => ({
+        ...c,
+        isWinningCard: (c.id === winningCard.id || (c.value === winningCard.value && c.suit === winningCard.suit && c.playedBy === winningCard.playedBy)),
+        trickNumber: gameState.trickCount
+    }));
+
     gameState.players[winnerIndex].points += trickPoints;
-    gameState.players[winnerIndex].wonCards.push(...gameState.board); 
+    gameState.players[winnerIndex].wonCards.push(trickCards); 
 
     gameState.turnIndex = winnerIndex;
     gameState.board = []; 
@@ -367,6 +397,8 @@ function startDeal() {
         return;
     }
 
+    updateMinBid(numPlayers);
+
     const cardsPerPlayer = Math.min(13, Math.trunc(52 / numPlayers));
     const totalCardsToDeal = cardsPerPlayer * numPlayers;
     const cardsToRemoveCount = 52 - totalCardsToDeal;
@@ -382,6 +414,7 @@ function startDeal() {
     gameState.trumpSuit = null;
     gameState.calledCards = [];
     gameState.originalCalledCards = [];
+    gameState.trickCount = 0;
 
     gameState.players.forEach(p => {
         p.hand = [];
@@ -410,11 +443,13 @@ function startDeal() {
 
     gameState.players.forEach(p => sortHand(p.hand));
     gameState.phase = 'BIDDING';
+    gameState.biddingStartedAt = Date.now();
 }
 
 function enterTrumpSelection() {
     gameState.phase = 'TRUMP_SELECTION';
     gameState.biddingDeadline = null;
+    gameState.biddingStartedAt = null;
     gameState.trumpSelectionDeadline = Date.now() + TRUMP_SELECTION_TIME_MS;
 }
 
@@ -427,6 +462,9 @@ function handlePlaceBid(playerId, amount) {
     const amt = Number(amount);
     if (!Number.isInteger(amt) || amt % 5 !== 0) {
         return { error: "Bid must be a whole number, a multiple of 5." };
+    }
+    if (gameState.highestBid.playerId === playerId) {
+        return { error: "You already hold the highest bid." };
     }
     if (amt < MIN_BID || amt > MAX_BID) {
         return { error: `Bid must be between ${MIN_BID} and ${MAX_BID}.` };
@@ -472,34 +510,34 @@ function resetBiddingTimer() {
     gameState.biddingDeadline = Date.now() + BIDDING_TIME_MS;
 }
 
-let cpuBidInterval, bidTimeoutInterval, turnTimeoutInterval, trumpTimeoutInterval;
+let hostGameLoopInterval = null;
+function hostGameTick() {
+    if (!isHost || gameState.isPaused) return;
 
-function safeLoop(name, fn) {
-    return function () {
-        try {
-            fn();
-        } catch (e) {
-            console.error('[game] Error in ' + name + ' loop:', e);
+    try {
+        if (gameState.phase === 'BIDDING') {
+            runCpuBidding();
+            checkBiddingTimeout();
+        } else if (gameState.phase === 'TRUMP_SELECTION') {
+            checkTrumpSelectionTimeout();
+        } else if (gameState.phase === 'PLAYING') {
+            checkTurnTimeout();
         }
-    };
+    } catch (e) {
+        console.error('[game] Error in hostGameTick:', e);
+    }
 }
 
 function startGameLoops() {
     stopGameLoops();
-    const hasCPU = gameState?.players?.some(p => p.isCPU);
-    if (hasCPU) {
-        cpuBidInterval = setInterval(safeLoop('runCpuBidding', runCpuBidding), 1000);
-    }
-    bidTimeoutInterval = setInterval(safeLoop('checkBiddingTimeout', checkBiddingTimeout), 1000);
-    turnTimeoutInterval = setInterval(safeLoop('checkTurnTimeout', checkTurnTimeout), 1000);
-    trumpTimeoutInterval = setInterval(safeLoop('checkTrumpSelectionTimeout', checkTrumpSelectionTimeout), 1000);
+    hostGameLoopInterval = setInterval(hostGameTick, 1000);
 }
 
 function stopGameLoops() {
-    clearInterval(cpuBidInterval);
-    clearInterval(bidTimeoutInterval);
-    clearInterval(turnTimeoutInterval);
-    clearInterval(trumpTimeoutInterval);
+    if (hostGameLoopInterval) {
+        clearInterval(hostGameLoopInterval);
+        hostGameLoopInterval = null;
+    }
 }
 
 startGameLoops();
@@ -509,13 +547,22 @@ let cpuBidPlans = {};
 let cpuTrumpPlan = null;
 let cpuMovePlan = null;
 
+const CPU_OPENING_BID_DELAY_MS = 15000;
+
 function runCpuBidding() {
-    if (!isHost || gameState.isPaused || gameState.phase !== 'BIDDING' || gameState.highestBid.amount === 0) return;
+    if (!isHost || gameState.isPaused || gameState.phase !== 'BIDDING') return;
+
+    // Initial waiting rule: give human players 15 seconds to make the opening bid first
+    if (gameState.highestBid.amount === 0) {
+        if (!gameState.biddingStartedAt || Date.now() - gameState.biddingStartedAt < CPU_OPENING_BID_DELAY_MS) {
+            return;
+        }
+    }
     let changed = false;
     let plannedThisTick = false;
 
     gameState.players.forEach(player => {
-        if (!player.isCPU || player.hasFolded) return;
+        if ((!player.isCPU && !player.isAutoPlay) || player.hasFolded) return;
         if (gameState.highestBid.playerId === player.id) return;
 
         let plan = cpuBidPlans[player.id];
@@ -616,7 +663,7 @@ function checkTurnTimeout() {
     const player = gameState.players[gameState.turnIndex];
     if (!player) { gameState.turnDeadline = null; return; }
 
-    if (player.isCPU) {
+    if (player.isCPU || player.isAutoPlay) {
         if (!cpuMovePlan || cpuMovePlan.playerId !== player.id) {
             cpuMovePlan = { playerId: player.id, actAt: Date.now() + 700 + Math.random() * 1300 };
         }
@@ -630,22 +677,7 @@ function checkTurnTimeout() {
 
     const isPlayerDisconnected = isDisconnected(player.id);
 
-    if (Date.now() >= gameState.turnDeadline) {
-        const playableCards = player.hand.filter(c => isCardPlayable(player.id, c));
-        const cardToPlay = playableCards.length > 0 
-            ? playableCards[Math.floor(Math.random() * playableCards.length)] 
-            : null;
-
-        if (cardToPlay) {
-            handlePlayCard(player.id, cardToPlay);
-        } else {
-            gameState.turnDeadline = null;
-        }
-        broadcastState();
-        return;
-    }
-
-    if ((isPlayerDisconnected && hasGraceExpired(player.id))) {
+    if ((isPlayerDisconnected && hasGraceExpired(player.id)) || Date.now() >= gameState.turnDeadline) {
         autoPlayFor(player);
         broadcastState();
     }
@@ -660,15 +692,71 @@ function autoResolveTrumpSelection() {
         startDeal();
         return;
     }
-    const randomSuit = suits[Math.floor(Math.random() * suits.length)];
     const allowedCards = Math.floor((gameState.players.length - 2) / 2);
-    const randomCalled = [];
-    for (let i = 0; i < allowedCards; i++) {
-        const v = values[Math.floor(Math.random() * values.length)];
-        const s = suits[Math.floor(Math.random() * suits.length)];
-        randomCalled.push(`${v}${s}`);
+
+    let selectedSuit = null;
+    if (gameState.draftTrump && suits.includes(gameState.draftTrump.suit)) {
+        selectedSuit = gameState.draftTrump.suit;
+    } else if (typeof document !== 'undefined') {
+        const domSuit = document.getElementById('trumpSuitSelect')?.value;
+        if (suits.includes(domSuit)) selectedSuit = domSuit;
     }
-    handleSetTrump(bidderId, randomSuit, randomCalled);
+    if (!selectedSuit) {
+        const bidder = gameState.players[bidderIndex];
+        if (bidder && Array.isArray(bidder.hand) && bidder.hand.length > 0) {
+            const suitCounts = {};
+            suits.forEach(s => { suitCounts[s] = 0; });
+            bidder.hand.forEach(c => {
+                if (c && c.suit && suits.includes(c.suit)) suitCounts[c.suit] = (suitCounts[c.suit] || 0) + 1;
+            });
+            selectedSuit = suits.slice().sort((a, b) => suitCounts[b] - suitCounts[a])[0];
+        } else {
+            selectedSuit = suits[Math.floor(Math.random() * suits.length)];
+        }
+    }
+
+    let candidateCards = [];
+    if (gameState.draftTrump && Array.isArray(gameState.draftTrump.cards)) {
+        candidateCards = gameState.draftTrump.cards;
+    } else if (typeof document !== 'undefined') {
+        const ranks = document.querySelectorAll('.team-rank-select');
+        const suitSelects = document.querySelectorAll('.team-suit-select');
+        for (let i = 0; i < ranks.length && i < suitSelects.length; i++) {
+            candidateCards.push(`${ranks[i].value}${suitSelects[i].value}`);
+        }
+    }
+
+    const cardRegex = /^(10|[2-9JQKA])(♠|♥|♣|♦)$/;
+    const uniqueCalled = [];
+    const seenCards = new Set();
+    for (const c of candidateCards) {
+        if (typeof c === 'string' && cardRegex.test(c)) {
+            if (!seenCards.has(c)) {
+                seenCards.add(c);
+                uniqueCalled.push(c);
+                if (uniqueCalled.length === allowedCards) break;
+            }
+        }
+    }
+
+    if (uniqueCalled.length < allowedCards) {
+        const pool = [];
+        for (const s of suits) {
+            for (const v of values) {
+                const code = `${v}${s}`;
+                if (!seenCards.has(code)) pool.push(code);
+            }
+        }
+        while (uniqueCalled.length < allowedCards && pool.length > 0) {
+            const idx = Math.floor(Math.random() * pool.length);
+            const picked = pool.splice(idx, 1)[0];
+            seenCards.add(picked);
+            uniqueCalled.push(picked);
+        }
+    }
+
+    delete gameState.draftTrump;
+    handleSetTrump(bidderId, selectedSuit, uniqueCalled);
 }
 
 function checkTrumpSelectionTimeout() {
@@ -679,7 +767,7 @@ function checkTrumpSelectionTimeout() {
     const bidderId = gameState.highestBid.playerId;
     const bidder = gameState.players.find(p => p.id === bidderId);
 
-    if (bidder && bidder.isCPU) {
+    if (bidder && (bidder.isCPU || bidder.isAutoPlay)) {
         if (!cpuTrumpPlan || cpuTrumpPlan.playerId !== bidderId) {
             cpuTrumpPlan = { playerId: bidderId, actAt: Date.now() + 1000 + Math.random() * 1500 };
         }
@@ -689,7 +777,7 @@ function checkTrumpSelectionTimeout() {
                 const choice = getCpuTrumpChoice(bidder, gameState.players.length, gameState.highestBid.amount);
                 handleSetTrump(bidderId, choice.suit, choice.calls);
             } catch (e) {
-                console.error('[game] CPU trump choice failed; choosing randomly:', e);
+                console.error('[game] CPU trump choice failed; choosing via autoResolveTrumpSelection:', e);
                 autoResolveTrumpSelection();
             }
             broadcastState();
@@ -718,6 +806,8 @@ function togglePause() {
         if (gameState.biddingDeadline) {
             gameState.pausedRemaining = gameState.biddingDeadline - Date.now();
             gameState.biddingDeadline = null;
+        } else if (gameState.phase === 'BIDDING' && gameState.highestBid.amount === 0 && gameState.biddingStartedAt) {
+            gameState.biddingOpeningElapsed = Date.now() - gameState.biddingStartedAt;
         } else if (gameState.turnDeadline) {
             gameState.pausedRemaining = gameState.turnDeadline - Date.now();
             gameState.turnDeadline = null;
@@ -727,6 +817,10 @@ function togglePause() {
         }
         gameState.isPaused = true;
     } else {
+        if (gameState.biddingOpeningElapsed !== undefined) {
+            gameState.biddingStartedAt = Date.now() - gameState.biddingOpeningElapsed;
+            delete gameState.biddingOpeningElapsed;
+        }
         if (gameState.pausedRemaining !== null && gameState.pausedRemaining !== undefined) {
             const remaining = Math.max(1000, gameState.pausedRemaining);
             if (gameState.phase === 'BIDDING') {
@@ -798,4 +892,27 @@ function getSanitizedStateForClient(clientId) {
         console.error('[game] Failed to build sanitized state:', e);
         throw e;
     }
+}
+
+function getReconstructedTrickHistory(state = gameState) {
+    const allTricks = [];
+    if (!state || !Array.isArray(state.players)) return allTricks;
+    state.players.forEach(player => {
+        if (!player.wonCards) return;
+        player.wonCards.forEach((item, idx) => {
+            const trickCards = Array.isArray(item) ? item : [item];
+            if (trickCards.length === 0) return;
+            const trickNumber = trickCards[0]?.trickNumber || (idx + 1);
+            const trickPoints = trickCards.reduce((s, c) => s + (typeof getCardPoints === 'function' ? getCardPoints(c) : 0), 0);
+            allTricks.push({
+                trickNumber: trickNumber,
+                winnerName: player.name,
+                winnerId: player.id,
+                cards: trickCards,
+                points: trickPoints
+            });
+        });
+    });
+    allTricks.sort((a, b) => a.trickNumber - b.trickNumber);
+    return allTricks;
 }

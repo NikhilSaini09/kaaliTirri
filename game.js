@@ -89,10 +89,20 @@ function stripSpectatorTag(name) {
 }
 
 function getLobbyMembers() {
-    const members = [
-        ...gameState.players.map(p => ({ id: p.id, name: p.name, isCPU: !!p.isCPU })),
-        ...(gameState.spectators || []).map(s => ({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU }))
-    ];
+    const seen = new Set();
+    const members = [];
+    for (const p of gameState.players) {
+        if (!seen.has(p.id)) {
+            seen.add(p.id);
+            members.push({ id: p.id, name: p.name, isCPU: !!p.isCPU });
+        }
+    }
+    for (const s of (gameState.spectators || [])) {
+        if (!seen.has(s.id)) {
+            seen.add(s.id);
+            members.push({ id: s.id, name: stripSpectatorTag(s.name), isCPU: !!s.isCPU });
+        }
+    }
     const order = gameState.lobbyOrder || [];
     const rank = id => { const i = order.indexOf(id); return i === -1 ? order.length : i; };
     return members.sort((a, b) => rank(a.id) - rank(b.id));

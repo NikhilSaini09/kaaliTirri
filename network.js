@@ -599,6 +599,8 @@ function resetPeer() {
     peer = null;
     myPeerId = null;
     isHost = false;
+    gameState.players = [];
+    gameState.spectators = [];
 }
 
 function attachPeerErrorHandlers(p) {
@@ -639,15 +641,23 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         return;
     }
 
+    gameState.players = [];
     gameState.spectators = [];
+    gameState.excludedIds = [];
+    gameState.lobbyOrder = [];
+    gameState.disconnectedIds = [];
+    gameState.phase = 'LOBBY';
 
     peer.on('open', (id) => {
         try {
             myPeerId = id;
             isHost = true;
-            gameState.players.push({ id: myPeerId, name: myName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
-
             updateRoomIdDisplay(id);
+
+            if (!gameState.players.some(p => p.id === id)) {
+                gameState.players.push({ id: myPeerId, name: myName, hand: [], wonCards: [], points: 0, currentBid: 0, team: 'UNKNOWN' });
+            }
+
             renderState();
         } catch (e) {
             console.error('[network] Error while opening the room:', e);
@@ -678,6 +688,7 @@ document.getElementById('joinBtn').addEventListener('click', () => {
     peer.on('open', (id) => {
         try {
             myPeerId = id;
+            if (hostConnection && hostConnection.open) return;
             connectToHost(roomId, () => {
                 try {
                     hostConnection.send({ type: 'JOIN_LOBBY', name: myName });

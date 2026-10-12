@@ -566,6 +566,22 @@ function renderGameBoard() {
 
     // 3. Local Player
     const me = gameState.players.find(p => p.id === myPeerId);
+    const toggleAiBtn = document.getElementById('toggleAiBtn');
+    if (toggleAiBtn) {
+        if (me && !me.isCPU && gameState.phase !== 'LOBBY' && gameState.phase !== 'GAMEOVER') {
+            toggleAiBtn.style.display = 'inline-flex';
+            if (me.isAutoPlay) {
+                toggleAiBtn.classList.add('is-active');
+                toggleAiBtn.innerHTML = 'AutoPlay: ON (Tap to Resume)';
+            } else {
+                toggleAiBtn.classList.remove('is-active');
+                toggleAiBtn.innerHTML = 'AutoPlay';
+            }
+        } else {
+            toggleAiBtn.style.display = 'none';
+        }
+    }
+
     if (me) {
         const isMyTurn = activeTurnPlayer && activeTurnPlayer.id === me.id;
 
@@ -575,7 +591,21 @@ function renderGameBoard() {
         statusRow.className = 'my-status-row';
         myArea.insertBefore(statusRow, myArea.firstChild);
 
-        if (isMyTurn) {
+        if (me.isAutoPlay) {
+            const aiBadge = document.createElement('div');
+            aiBadge.className = 'ai-active-badge';
+            aiBadge.innerHTML = 'AI is playing for you &bull; Tap to resume';
+            aiBadge.title = 'Click to take control back';
+            aiBadge.addEventListener('click', () => {
+                if (isHost) {
+                    me.isAutoPlay = false;
+                    broadcastState();
+                } else {
+                    sendToHost({ type: 'ACTION_TOGGLE_AI' });
+                }
+            });
+            statusRow.appendChild(aiBadge);
+        } else if (isMyTurn) {
             const badge = document.createElement('div');
             badge.className = 'your-turn-badge';
             badge.innerHTML = '<span class="turn-dot"></span> Your Turn';
@@ -712,9 +742,13 @@ function renderGameBoard() {
                         suitSelect.setAttribute('aria-label', `Partner card ${i + 1} suit`);
                         suits.forEach(s => suitSelect.appendChild(new Option(s, s)));
 
+                        rankSelect.addEventListener('change', syncDraftTrump);
+                        suitSelect.addEventListener('change', syncDraftTrump);
+
                         selectorDiv.appendChild(rankSelect); selectorDiv.appendChild(suitSelect);
                         teamCardsContainer.appendChild(selectorDiv);
                     }
+                    syncDraftTrump();
                     trumpPanelWasOpen = true;
                 }
             } else {
@@ -1097,6 +1131,7 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', guarded
             p.currentBid = 0;
             p.hasFolded = false;
             p.team = 'UNKNOWN';
+            p.isAutoPlay = false;
         });
 
         gameState.deck = [];
@@ -1110,6 +1145,7 @@ document.getElementById('modalBackToLobbyBtn').addEventListener('click', guarded
         gameState.trumpSelectionDeadline = null;
         gameState.isPaused = false;
         gameState.pausedRemaining = null;
+        gameState.draftTrump = null;
 
         cpuBidPlans = {};
         cpuTrumpPlan = null;
@@ -1173,6 +1209,33 @@ document.getElementById('setTrumpBtn').addEventListener('click', guarded('setTru
 
     if (isHost) { handleSetTrump(myPeerId, suit, chosenCards); broadcastState(); }
     else sendToHost({ type: 'ACTION_SET_TRUMP', suit: suit, cards: chosenCards });
+}));
+
+function syncDraftTrump() {
+    const suit = document.getElementById('trumpSuitSelect')?.value;
+    const ranks = document.querySelectorAll('.team-rank-select');
+    const suitSelects = document.querySelectorAll('.team-suit-select');
+    let chosenCards = [];
+    for (let i = 0; i < ranks.length && i < suitSelects.length; i++) {
+        chosenCards.push(`${ranks[i].value}${suitSelects[i].value}`);
+    }
+    if (isHost) {
+        gameState.draftTrump = { suit, cards: chosenCards };
+    } else {
+        sendToHost({ type: 'ACTION_PARTIAL_TRUMP', suit, cards: chosenCards });
+    }
+}
+document.getElementById('trumpSuitSelect')?.addEventListener('change', syncDraftTrump);
+
+document.getElementById('toggleAiBtn')?.addEventListener('click', guarded('toggleAi', () => {
+    const me = gameState.players.find(p => p.id === myPeerId);
+    if (!me || me.isCPU) return;
+    if (isHost) {
+        me.isAutoPlay = !me.isAutoPlay;
+        broadcastState();
+    } else {
+        sendToHost({ type: 'ACTION_TOGGLE_AI' });
+    }
 }));
 
 function closeWonCardsModal() {

@@ -136,8 +136,12 @@ function isRateLimited(peerId) {
 }
 
 let leaveSent = false;
-function sendLeaveNotice() {
-    if (isHost || leaveSent || !hostConnection) return;
+function sendLeaveNoticeAndHostControl() {
+    if (isHost) {
+        emergencyHostTransfer();
+        return;
+    }
+    if (leaveSent || !hostConnection) return;
     leaveSent = true;
     try {
         hostConnection.send({ type: 'LEAVE' });
@@ -145,7 +149,7 @@ function sendLeaveNotice() {
         console.warn('[network] Could not send the LEAVE notice:', e);
     }
 }
-window.addEventListener('pagehide', sendLeaveNotice);
+window.addEventListener('pagehide', sendLeaveNoticeAndHostControl);
 
 setInterval(() => {
     if (isHost || !hostConnection) return;
@@ -384,6 +388,18 @@ function attachHostConnectionHandler() {
             if (data.type === 'ACTION_FOLD') { handleFold(conn.peer); broadcastState(); }
             if (data.type === 'ACTION_SET_TRUMP') { handleSetTrump(conn.peer, data.suit, data.cards); broadcastState(); }
             if (data.type === 'ACTION_PLAY_CARD') { handlePlayCard(conn.peer, data.card); broadcastState(); }
+            if (data.type === 'ACTION_TOGGLE_AI') {
+                const p = gameState.players.find(pl => pl.id === conn.peer);
+                if (p && !p.isCPU) {
+                    p.isAutoPlay = !p.isAutoPlay;
+                    broadcastState();
+                }
+            }
+            if (data.type === 'ACTION_PARTIAL_TRUMP') {
+                if (gameState.highestBid.playerId === conn.peer && gameState.phase === 'TRUMP_SELECTION') {
+                    gameState.draftTrump = { suit: data.suit, cards: Array.isArray(data.cards) ? data.cards : [] };
+                }
+            }
 
             if (data.type === 'PROMOTION_READY') {
                 if (conn.peer !== pendingPromotionTarget) return;
@@ -477,6 +493,90 @@ function promoteToHost(targetId) {
         pendingPromotionTarget = null;
         alert("Could not hand over hosting. Please try again.");
     }
+}
+
+let hostTransferDone = false;
+function emergencyHostTransfer() {
+    if (!isHost || hostTransferDone) return;
+
+    const activeHumans = (gameState.players || []).filter(p => !p.isCPU && p.id !== myPeerId && !isDisconnected(p.id) && connections[p.id] && connections[p.id].open);
+    const specHumans = (gameState.spectators || []).filter(s => !s.isCPU && s.id !== myPeerId && !isDisconnected(s.id) && connections[s.id] && connections[s.id].open);
+    const candidates = activeHumans.length > 0 ? activeHumans : specHumans;
+
+    if (candidates.length === 0) return;
+
+    hostTransferDone = true;
+
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    const newHostId = chosen.id;
+
+    if (gameState.phase !== 'LOBBY') {
+        gameState.phase = 'LOBBY';
+        gameState.deck = [];
+        gameState.board = [];
+        gameState.highestBid = { playerId: null, amount: 0, playerName: "" };
+        gameState.trumpSuit = null;
+        gameState.calledCards = [];
+        gameState.originalCalledCards = [];
+        gameState.biddingDeadline = null;
+        gameState.turnDeadline = null;
+        gameState.trumpSelectionDeadline = null;
+        gameState.isPaused = false;
+        gameState.pausedRemaining = null;
+        gameState.excludedIds = (gameState.spectators || []).map(sp => sp.id);
+        gameState.players.forEach(p => {
+            p.hand = [];
+            p.wonCards = [];
+            p.points = 0;
+            p.currentBid = 0;
+            p.hasFolded = false;
+            p.team = 'UNKNOWN';
+            p.isAutoPlay = false;
+        });
+    }
+
+    gameState.players = gameState.players.filter(p => p.id !== myPeerId);
+    gameState.spectators = (gameState.spectators || []).filter(s => s.id !== myPeerId);
+    gameState.excludedIds = (gameState.excludedIds || []).filter(id => id !== myPeerId);
+    gameState.lobbyOrder = (gameState.lobbyOrder || []).filter(id => id !== myPeerId);
+    gameState.disconnectedIds = (gameState.disconnectedIds || []).filter(id => id !== myPeerId);
+
+    const targetPlayer = gameState.players.find(p => p.id === newHostId);
+    if (targetPlayer) {
+        targetPlayer.name = targetPlayer.name.replace(/\s*\((Host|H)\)\s*/gi, '').trim() + ' (Host)';
+    } else {
+        const targetSpec = (gameState.spectators || []).find(s => s.id === newHostId);
+        if (targetSpec) {
+            targetSpec.name = targetSpec.name.replace(/\s*\((Host|H|Spectator)\)\s*/gi, '').trim() + ' (Host)';
+        }
+    }
+
+    try {
+        if (connections[newHostId] && connections[newHostId].open) {
+            connections[newHostId].send({
+                type: 'PROMOTE_TO_HOST',
+                state: gameState,
+                gameStats: statsForWire(),
+                playerData: playerData
+            });
+        }
+    } catch (e) {
+        console.warn('[network] emergencyHostTransfer failed to send to new host:', e);
+    }
+
+    Object.keys(connections).forEach(id => {
+        if (id !== newHostId) {
+            try {
+                if (connections[id] && connections[id].open) {
+                    connections[id].send({ type: 'HOST_MIGRATED', newHostId: newHostId });
+                }
+            } catch (e) {
+                console.warn('[network] emergencyHostTransfer failed to notify ' + id + ':', e);
+            }
+        }
+    });
+
+    isHost = false;
 }
 
 function connectToHost(targetId, onFirstJoin) {
@@ -599,6 +699,7 @@ function resetPeer() {
     peer = null;
     myPeerId = null;
     isHost = false;
+    hostTransferDone = false;
     gameState.players = [];
     gameState.spectators = [];
 }
@@ -641,6 +742,7 @@ document.getElementById('hostBtn').addEventListener('click', () => {
         return;
     }
 
+    hostTransferDone = false;
     gameState.players = [];
     gameState.spectators = [];
     gameState.excludedIds = [];

@@ -748,7 +748,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    gap: 75px;
+    gap: 49px;
     position: relative;
     overflow: visible;
     padding-top: 225px;
@@ -950,10 +950,40 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     position: relative;
     z-index: 50;
     margin: 0 3px 6px;
-    transition: transform 0.15s ease, margin 0.15s ease;
+    transform-origin: 50% 120%;
+    transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.4, 1), box-shadow 0.2s ease, opacity 0.2s ease;
+    will-change: transform;
 }
-.my-card-wrapper:hover { transform: translateY(-10px); z-index: 100 !important; }
-.my-card-wrapper .card { transition: width 0.15s ease, height 0.15s ease, font-size 0.15s ease; }
+.my-card-wrapper.is-playable:hover {
+    transform: rotate(0deg) translateY(-22px) scale(1.08) !important;
+    z-index: 100 !important;
+}
+.my-card-wrapper.is-playable:hover .card {
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55), 0 0 10px rgba(243, 223, 160, 0.4);
+    border-color: var(--brass-400);
+}
+.my-card-wrapper.is-playable:active {
+    transform: rotate(0deg) translateY(-14px) scale(1.04) !important;
+}
+.my-card-wrapper .card { transition: width 0.15s ease, height 0.15s ease, font-size 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease; }
+
+.played-card {
+    will-change: transform, opacity, translate;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.played-card.is-trick-sweeping {
+    transition: translate 0.48s cubic-bezier(0.4, 0, 0.2, 1), scale 0.48s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.42s ease !important;
+    pointer-events: none !important;
+}
+
+@keyframes wonPileBump {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.25); }
+    100% { transform: scale(1); }
+}
+.won-pile-bump {
+    animation: wonPileBump 0.4s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
 
 @keyframes card-fade-in {
     from { opacity: 0; }
@@ -998,7 +1028,7 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     flex-wrap: wrap;
     gap: 8px;
     min-height: 36px;
-    margin-bottom: 10px;
+    margin-bottom: 36px;
     position: relative;
     z-index: 3050;
 }
@@ -1567,12 +1597,16 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 .floating-reaction {
     position: absolute;
     bottom: 20px;
+    pointer-events: none;
+    animation: floatAscent 3.8s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+
+.reaction-sway-wrap {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 2px;
-    animation: floatReaction 2.6s ease-out forwards;
-    pointer-events: none;
+    animation: floatSway 0.85s ease-in-out infinite alternate;
 }
 
 .floating-reaction .reaction-emoji {
@@ -1591,13 +1625,31 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
     white-space: nowrap;
 }
 
-@keyframes floatReaction {
-    0% { transform: translateY(0) scale(0.5); opacity: 0; }
-    10% { opacity: 1; transform: translateY(-20px) scale(1.2); }
-    25% { transform: translateY(-70px) scale(1) translateX(8px); }
-    50% { transform: translateY(-170px) translateX(-10px); }
-    75% { transform: translateY(-290px) translateX(6px); opacity: 0.85; }
-    100% { transform: translateY(-430px) translateX(-4px) scale(1.05); opacity: 0; }
+@keyframes floatAscent {
+    0% {
+        transform: translateY(0) scale(0.6);
+        opacity: 0;
+    }
+    10% {
+        transform: translateY(-35px) scale(1.15);
+        opacity: 1;
+    }
+    80% {
+        opacity: 0.95;
+    }
+    100% {
+        transform: translateY(-440px) scale(0.95);
+        opacity: 0;
+    }
+}
+
+@keyframes floatSway {
+    0% {
+        transform: translateX(calc(var(--drift, 36px) * -1));
+    }
+    100% {
+        transform: translateX(var(--drift, 36px));
+    }
 }
 
 /* StatusRow buttons: History & Chat */
@@ -1812,8 +1864,18 @@ label.btn-brass:hover, label.btn-success:hover, label.btn-danger:hover, label.bt
 
     .pause-card { padding: 26px 24px; }
 
-    .my-status-row { margin-bottom: 8px; min-height: 0; }
+    .my-status-row { margin-bottom: 34px; min-height: 0; }
     .my-status-row:empty { display: none; }
+    #my-area { padding: 0 10px; }
+    .my-card-wrapper {
+        transform: none !important;
+        margin: 0 4px 6px;
+    }
+    .my-card-wrapper.is-playable:hover,
+    .my-card-wrapper.is-playable:active {
+        transform: translateY(-8px) scale(1.04) !important;
+        z-index: 100 !important;
+    }
     .my-won-pile { font-size: 11px; padding: 5px 10px; }
     .your-turn-badge { font-size: 11px; padding: 5px 11px; }
     .opponent-container.compact { min-width: 58px; }

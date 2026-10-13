@@ -289,10 +289,12 @@ let trumpPanelWasOpen = false;
 let lastHandIds = null;
 const prefersReducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 let boardCardCache = {};
+let lastEvaluatedWinnerId = null;
 let lastOppSignature = null;
 
 function resetUiCaches() {
     boardCardCache = {};
+    lastEvaluatedWinnerId = null;
     lastOppSignature = null;
     lastHandIds = null;
     previousTurnPlayerId = null;
@@ -459,13 +461,59 @@ function renderGameBoard() {
 
     // 1. Center Board
     const winningCard = getCurrentWinningCard(gameState.board, gameState.trumpSuit);
+    if (winningCard) {
+        lastEvaluatedWinnerId = winningCard.playedBy;
+    }
     const boardIdsNow = new Set(gameState.board.map(c => c.id));
+    const sweptCardIds = [];
     Object.keys(boardCardCache).forEach(id => {
         if (!boardIdsNow.has(id)) {
-            boardCardCache[id].el.remove();
+            const entry = boardCardCache[id];
             delete boardCardCache[id];
+            sweptCardIds.push(id);
+            if (prefersReducedMotion || !entry || !entry.el) {
+                if (entry && entry.el) entry.el.remove();
+            } else {
+                let sweepX = 0, sweepY = 240;
+                if (lastEvaluatedWinnerId && lastEvaluatedWinnerId !== myPeerId && seatAngle[lastEvaluatedWinnerId] !== undefined) {
+                    const ang = seatAngle[lastEvaluatedWinnerId];
+                    sweepX = Math.round(Math.cos(ang) * 220);
+                    sweepY = Math.round(Math.sin(ang) * 220);
+                }
+                const cardEl = entry.el;
+                cardEl.classList.remove('is-winning-card');
+                cardEl.classList.add('is-trick-sweeping');
+                requestAnimationFrame(() => {
+                    cardEl.style.translate = `${sweepX}px ${sweepY}px`;
+                    cardEl.style.scale = '0.2';
+                    cardEl.style.opacity = '0';
+                });
+                setTimeout(() => {
+                    if (cardEl.parentNode) cardEl.remove();
+                }, 480);
+            }
         }
     });
+
+    if (!prefersReducedMotion && sweptCardIds.length > 0 && lastEvaluatedWinnerId) {
+        const winnerToBump = lastEvaluatedWinnerId;
+        setTimeout(() => {
+            if (winnerToBump === myPeerId) {
+                const pile = document.querySelector('.my-won-pile');
+                if (pile) {
+                    pile.classList.add('won-pile-bump');
+                    setTimeout(() => pile.classList.remove('won-pile-bump'), 420);
+                }
+            } else {
+                const pileBtn = document.querySelector(`.opponent-container[data-player-id="${winnerToBump}"] .won-pile-btn`);
+                if (pileBtn) {
+                    pileBtn.classList.add('won-pile-bump');
+                    setTimeout(() => pileBtn.classList.remove('won-pile-bump'), 420);
+                }
+            }
+        }, 450);
+    }
+
     gameState.board.forEach((card) => {
         let entry = boardCardCache[card.id];
         const isKaaliTirri = card.value === '3' && card.suit === '♠';
@@ -473,25 +521,25 @@ function renderGameBoard() {
         if (!entry) {
             const cardEl = createCardElement(card);
             cardEl.classList.add('played-card');
-            const rotation = (Math.random() * 12 - 6);
+            const rotation = isMobile ? 0 : (Math.random() * 12 - 6);
 
             if (isKaaliTirri) {
                 cardEl.classList.add('is-kaali-tirri');
             } else {
-                let dx = 0, dy = 46;
+                let dx = 0, dy = 100;
                 if (card.playedBy !== myPeerId && seatAngle[card.playedBy] !== undefined) {
                     const ang = seatAngle[card.playedBy];
-                    dx = Math.cos(ang) * 46;
-                    dy = Math.sin(ang) * 46;
+                    dx = Math.cos(ang) * 90;
+                    dy = Math.sin(ang) * 90;
                 }
                 if (prefersReducedMotion) {
                     cardEl.style.opacity = '1';
                 } else {
                     cardEl.style.translate = `${dx}px ${dy}px`;
-                    cardEl.style.scale = '0.5';
+                    cardEl.style.scale = '0.6';
                     cardEl.style.opacity = '0';
                     requestAnimationFrame(() => {
-                        cardEl.style.transition = 'translate 0.32s cubic-bezier(.22,.75,.3,1.1), scale 0.32s cubic-bezier(.22,.75,.3,1.1), opacity 0.22s ease';
+                        cardEl.style.transition = 'translate 0.34s cubic-bezier(.22,.75,.3,1.1), scale 0.34s cubic-bezier(.22,.75,.3,1.1), opacity 0.22s ease';
                         cardEl.style.translate = '0px 0px';
                         cardEl.style.scale = '1';
                         cardEl.style.opacity = '1';
@@ -535,6 +583,7 @@ function renderGameBoard() {
         opponents.forEach((player) => {
         const oppDiv = document.createElement('div');
         oppDiv.className = 'opponent-container' + (isMobile ? ' compact' : '') + (dense ? ' dense' : '');
+        oppDiv.dataset.playerId = player.id;
 
         const isActiveTurn = activeTurnPlayer && activeTurnPlayer.id === player.id;
         const showFoldState = (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION');
@@ -699,8 +748,8 @@ function renderGameBoard() {
         if (cardWrappers.length > 0) {
             const cardCount = cardWrappers.length;
             const gap = 8;
-            const naturalWidth = window.innerWidth <= 640 ? 46 : 65;
-            const minWidth = window.innerWidth <= 640 ? 30 : 40;
+            const naturalWidth = isMobile ? 46 : 65;
+            const minWidth = isMobile ? 30 : 40;
             const availWidth = myArea.clientWidth - 44;
             let cardW = Math.floor((availWidth - (cardCount - 1) * gap) / cardCount);
             cardW = Math.max(minWidth, Math.min(naturalWidth, cardW));
@@ -708,15 +757,25 @@ function renderGameBoard() {
             const rankSize = Math.max(11, Math.round(cardW * 0.30));
             const suitSize = Math.max(12, Math.round(cardW * 0.34));
 
-            cardWrappers.forEach(wrapper => {
+            const mid = (cardCount - 1) / 2;
+            const maxAngle = Math.min(14, Math.max(3, cardCount * 1.1));
+            cardWrappers.forEach((wrapper, index) => {
                 wrapper.style.margin = `0 ${gap / 2}px 6px`;
+                if (!isMobile && !prefersReducedMotion) {
+                    const diff = index - mid;
+                    const rot = mid > 0 ? (diff / mid) * maxAngle : 0;
+                    const archY = Math.pow(mid > 0 ? diff / mid : 0, 2) * (cardCount > 6 ? 8 : 4);
+                    wrapper.style.transform = `rotate(${rot.toFixed(1)}deg) translateY(${archY.toFixed(1)}px)`;
+                } else {
+                    wrapper.style.transform = 'none';
+                }
                 const cardEl = wrapper.querySelector('.card');
                 if (!cardEl) return;
                 cardEl.style.width = `${cardW}px`;
                 cardEl.style.height = `${cardH}px`;
                 cardEl.style.fontSize = `${rankSize}px`;
-                    const suitEl = cardEl.querySelector('.card-suit');
-                    if (suitEl) suitEl.style.fontSize = `${suitSize}px`;
+                const suitEl = cardEl.querySelector('.card-suit');
+                if (suitEl) suitEl.style.fontSize = `${suitSize}px`;
             });
         }
 
@@ -1649,8 +1708,15 @@ function triggerFloatingEmoji(emoji, senderName) {
 
     const el = document.createElement('div');
     el.className = 'floating-reaction';
-    const leftPercent = 15 + Math.random() * 65;
+    const leftPercent = 18 + Math.random() * 64;
     el.style.left = `${leftPercent}%`;
+    const driftDir = Math.random() < 0.5 ? 1 : -1;
+    const waveAmp = (32 + Math.random() * 10) * driftDir;
+    el.style.setProperty('--drift', `${waveAmp.toFixed(1)}px`);
+
+    const swayWrap = document.createElement('div');
+    swayWrap.className = 'reaction-sway-wrap';
+    swayWrap.style.animationDelay = `${(-Math.random() * 0.85).toFixed(2)}s`;
 
     const emojiSpan = document.createElement('span');
     emojiSpan.className = 'reaction-emoji';
@@ -1660,8 +1726,9 @@ function triggerFloatingEmoji(emoji, senderName) {
     senderSpan.className = 'reaction-sender';
     senderSpan.textContent = cleanPlayerName(senderName || 'Player');
 
-    el.appendChild(emojiSpan);
-    el.appendChild(senderSpan);
+    swayWrap.appendChild(emojiSpan);
+    swayWrap.appendChild(senderSpan);
+    el.appendChild(swayWrap);
 
     container.appendChild(el);
 
@@ -1670,7 +1737,7 @@ function triggerFloatingEmoji(emoji, senderName) {
     });
     setTimeout(() => {
         if (el.parentNode) el.remove();
-    }, 3200);
+    }, 4200);
 }
 
 function submitChatMessage() {

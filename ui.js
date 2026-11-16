@@ -635,11 +635,38 @@ function renderGameBoard() {
 
     if (gameState.phase !== 'LOBBY') {
         gameInfo.style.display = 'inline-flex';
+        const teamPtsEl = document.getElementById('team-pts-info');
+
         if (gameState.phase === 'BIDDING' || gameState.phase === 'TRUMP_SELECTION') {
             document.getElementById('bid-info').innerHTML = `High Bid: <b>${escapeHtml(gameState.highestBid.amount || '—')}</b> (${gameState.highestBid.playerName ? escapeHtml(cleanPlayerName(gameState.highestBid.playerName)) : 'None yet'})`;
             document.getElementById('trump-info').innerHTML = '';
+            if (teamPtsEl) {
+                teamPtsEl.innerHTML = '';
+                teamPtsEl.style.display = 'none';
+            }
         } else {
-            document.getElementById('bid-info').innerHTML = `Target: <b>${escapeHtml(gameState.highestBid.amount)}</b> (${escapeHtml(cleanPlayerName(gameState.highestBid.playerName))})`;
+            const rawBidder = gameState.highestBid ? (gameState.highestBid.playerName || '') : '';
+            const bidderName = cleanPlayerName(rawBidder).replace(/\s*\([HS]\)\s*$/, '').trim();
+            const targetAmt = gameState.highestBid ? (gameState.highestBid.amount || 0) : 0;
+            document.getElementById('bid-info').innerHTML = `Target: <b>${escapeHtml(targetAmt)}</b>${bidderName ? ` (${escapeHtml(bidderName)})` : ''}`;
+
+            const revealedBidders = (gameState.players || []).filter(p => p.team === 'BIDDER_TEAM');
+            const bidderTeamPts = revealedBidders.reduce((sum, p) => sum + (p.points || 0), 0);
+            const isMet = targetAmt > 0 && bidderTeamPts >= targetAmt;
+            const remaining = Math.max(0, targetAmt - bidderTeamPts);
+
+            if (teamPtsEl) {
+                const revealedNames = revealedBidders.map(p => `${cleanPlayerName(p.name)} (${p.points || 0})`).join(', ');
+                teamPtsEl.title = revealedBidders.length > 0 
+                    ? `Revealed Bidder Team: ${revealedNames} — ${isMet ? 'Target reached!' : `${remaining} to reach target`}` 
+                    : 'Bidder points';
+                const remHtml = isMet 
+                    ? `<span class="pts-rem met">(Met 🎯)</span>` 
+                    : `<span class="pts-rem">(${remaining} left)</span>`;
+                teamPtsEl.innerHTML = `Bidder: <b class="${isMet ? 'pts-target-met' : 'pts-val'}">${bidderTeamPts}</b> ${remHtml}`;
+                teamPtsEl.style.display = 'inline-flex';
+            }
+
             const trumpColor = (gameState.trumpSuit === '♥' || gameState.trumpSuit === '♦') ? 'red' : 'black';
             let trumpHtml = `Trump: <span class="trump-suit-display ${trumpColor}">${escapeHtml(gameState.trumpSuit)}</span>`;
             if (gameState.originalCalledCards && gameState.originalCalledCards.length > 0) {
@@ -1601,8 +1628,9 @@ function openChatModal() {
     document.getElementById('chat-modal-backdrop').style.display = 'block';
     const container = document.getElementById('chat-messages-container');
     if (container) container.scrollTop = container.scrollHeight;
+    const isMobile = window.innerWidth <= 860;
     const input = document.getElementById('chatInput');
-    if (input) input.focus();
+    if (input && !isMobile) input.focus();
 }
 
 function closeChatModal() {
@@ -1764,7 +1792,7 @@ function initChatAndEmojiPicker() {
             const input = document.getElementById('chatInput');
             if (input && emoji) {
                 input.value += emoji;
-                input.focus();
+                if (window.innerWidth > 860) input.focus();
             }
         });
     }
@@ -1796,7 +1824,7 @@ function initChatAndEmojiPicker() {
                     const input = document.getElementById('chatInput');
                     if (input) {
                         input.value += emoji;
-                        input.focus();
+                        if (window.innerWidth > 860) input.focus();
                     }
                 });
                 grid.appendChild(btn);
